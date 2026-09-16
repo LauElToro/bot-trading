@@ -1,4 +1,4 @@
-# GRVT Grid — Roadmap
+# Toro — Roadmap
 
 > **Last updated**: 2026-04-25
 > **Current state**: Phases A-H complete. Bots running in production (ETH 10x + SOL virtual grids 10x). Phase I (Lumina) paused.

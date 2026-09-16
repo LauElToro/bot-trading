@@ -159,7 +159,7 @@ const basicAuth = (req: express.Request, res: express.Response, next: express.Ne
 
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Basic ')) {
-    res.setHeader('WWW-Authenticate', 'Basic realm="GRVT Grid Bot Dashboard"');
+    res.setHeader('WWW-Authenticate', 'Basic realm="Toro Dashboard"');
     return res.status(401).send('Authentication required');
   }
 
@@ -573,7 +573,7 @@ app.post('/api/bots/:id/close', async (req, res) => {
   }
 });
 
-// Delete bot (NUEVO según specs de Manu) - Como POST por problemas con Express routing
+// Delete bot — POST por problemas con Express routing
 app.post('/api/bots/:id/delete', async (req, res) => {
   try {
     const botId = parseInt(req.params.id);
@@ -1428,7 +1428,7 @@ async function startServer() {
     }
 
     httpServer.listen(PORT, () => {
-      console.log('🔧 GRVT Grid Bot Dashboard - Fase 3');
+      console.log('Toro dashboard');
       console.log(`🌐 Server: http://localhost:${PORT}`);
       console.log(
         `🔐 Legacy auth (/api/*): ${legacyAuthDisabledReason ? 'DISABLED — ' + legacyAuthDisabledReason : 'enabled'}`

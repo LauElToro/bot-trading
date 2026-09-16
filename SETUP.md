@@ -1,18 +1,18 @@
-# GRVTBot — self-host local (Windows)
+# Toro — self-host local (Windows)
 
-Instancia clonada en `e:\GRVTBot`. El motor es un **grid mecánico**: vos definís rango, niveles, inversión y riesgo. La IA **no elige** par, precios, leverage ni SL/TP.
+El motor es un **grid mecánico**: vos definís rango, niveles, inversión y riesgo. La IA **no elige** par, precios, leverage ni SL/TP.
 
-Documentación upstream: [README](https://github.com/kmanus88/GRVTBot), [INSTALL](docs/INSTALL.md), [SECURITY](SECURITY.md).
+Si no tenés cuenta GRVT: [grvt.io/?ref=5LBBEMJ](https://grvt.io/?ref=5LBBEMJ)
 
-Parches locales (solo para que Docker arranque en Windows; **no cambian el grid**):
+Docs: [README](README.md), [INSTALL](docs/INSTALL.md), [SECURITY](SECURITY.md).
+
+Ajustes locales para Docker en Windows:
 
 - `packages/dashboard/src/vite-env.d.ts` — tipos de Vite para que compile el SPA.
-- `packages/bot/Dockerfile` — `npm rebuild sqlite3 --build-from-source` (el prebuild de npm pedía glibc 2.38; Bookworm tiene 2.36).
+- `packages/bot/Dockerfile` — `npm rebuild sqlite3 --build-from-source`.
 - `docker-compose.yml` — monta `secrets/master.key` de solo lectura.
 
-## Estado actual del arranque
-
-Verificado en esta máquina: contenedor `grvt-grid-bot` **healthy**, `GET /api/health` → 200, SPA en `/dashboard/` con título `GRVT Grid`. 0 bots activos (vos creás el primero).
+## Estado del arranque
 
 | Ítem | Valor |
 |------|--------|
@@ -20,7 +20,7 @@ Verificado en esta máquina: contenedor `grvt-grid-bot` **healthy**, `GET /api/h
 | Health | http://localhost:3848/api/health |
 | `MOCK_MODE` | `true` — no autentica contra GRVT |
 | `DRY_RUN` | `true` — si hay sesión GRVT, **no envía órdenes** |
-| Master key | `secrets/master.key` (32 bytes), montada en el contenedor en `/etc/grvt-grid/master.key` |
+| Master key | `secrets/master.key` (32 bytes), montada en `/etc/grvt-grid/master.key` |
 | DB | `data/grid_bot.db` (aparece al primer boot) |
 | Primer usuario | `OWNER_EMAIL` / `OWNER_INITIAL_PASSWORD` en `.env` |
 
@@ -47,7 +47,7 @@ docker compose down
 ## Primer login
 
 1. Abrí http://localhost:3848/dashboard/
-2. Entrá con `OWNER_EMAIL` y `OWNER_INITIAL_PASSWORD` de tu `.env` (hoy: `admin@localhost` + la clave generada).
+2. Entrá con `OWNER_EMAIL` y `OWNER_INITIAL_PASSWORD` de tu `.env`.
 3. Cambiá la contraseña en la UI.
 4. **Borrá** `OWNER_INITIAL_PASSWORD` del `.env` y recreá el contenedor: `docker compose up -d`.
 
@@ -55,30 +55,20 @@ docker compose down
 
 Paso a paso para la API de GRVT **sin withdraw**: [`CUENTA-OPERADOR.md`](CUENTA-OPERADOR.md).
 
-## Cómo pasar a GRVT de verdad (vos, no la IA)
+## Cómo pasar a GRVT de verdad
 
 El wizard pide **tus** números. No hay defaults de trading inventados acá.
 
 1. Creá la API como en [`CUENTA-OPERADOR.md`](CUENTA-OPERADOR.md): Trading Account + permiso **Trade** solamente.
-2. Pegá `GRVT_API_KEY`, `GRVT_API_SECRET`, `GRVT_TRADING_ACCOUNT_ID`, `GRVT_TRADING_ADDRESS` en `.env` **o** en la pantalla de credenciales del dashboard.
+2. Pegá las credenciales en el dashboard (Conectar GRVT).
 3. Dejá `DRY_RUN=true` y pasá `MOCK_MODE=false`. Recreá: `docker compose up -d`.
-4. En el dashboard: crear bot **pausado**. Completá vos:
-   - Par
-   - Dirección long / short
-   - Precio inferior / superior
-   - Cantidad de grillas
-   - Inversión
-   - Apalancamiento
-   - SL / TP (`sl_pct` / `tp_pct` sobre la inversión)
-   - Auto-shift: **off** al principio
-   - Grillas virtuales + ventana activa (el exchange topea ~80 órdenes reales)
-5. Usá la página de **backtest** del dashboard con **tus** números antes de capital real.
-6. Recién cuando estés conforme: `DRY_RUN=false` en `.env`, `docker compose up -d`, y **start** del bot desde la UI.
+4. En el dashboard: crear bot **pausado**. Completá vos rango, N, inversión, leverage, SL/TP.
+5. Usá el **backtest** con tus números antes de capital real.
+6. Recién cuando estés conforme: `DRY_RUN=false`, `docker compose up -d`, y **start** desde la UI.
 
 ## Qué no hace este setup
 
 - No elige ni “optimiza” rango, N, leverage ni inversión.
-- No toca el bot Bybit en `e:\trade 2.0`.
 - No cancela órdenes de GRVT al parar el contenedor. Cerrar posición/órdenes es desde el dashboard (`pause` / `close`).
 
 ## Backups

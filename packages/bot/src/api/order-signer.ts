@@ -1,5 +1,5 @@
 // GRVT Order Signer - EIP-712 Implementation
-// Implementación de firma de órdenes según formato verificado por Marta
+// Firma de órdenes EIP-712.
 // ⚠️ CRÍTICO: PRICE_MULTIPLIER = 1e9, NO usar quote_decimals
 
 import { SignTypedDataVersion, signTypedData } from '@metamask/eth-sig-util';
@@ -11,7 +11,7 @@ dotenv.config();
 // orders constantly, the un-gated console.log dump (~25 lines per
 // signature + full EIP-712 JSON twice) was the dominant log-volume
 // source — ~50 GB/day projected, filling /var/log inside 24h and
-// taking grvtbot.com to 502 (2026-06-05, 2026-06-07).
+// taking the process to 502 (2026-06-05, 2026-06-07).
 const debugSign = process.env.DEBUG_SIGN === '1';
 const dlog = (...args: unknown[]): void => {
   if (debugSign) console.log(...args);
@@ -49,7 +49,7 @@ const EIP712_TYPES = {
   ],
 };
 
-// ⚠️ CRÍTICO: PRICE_MULTIPLIER = 1e9 (verificado por Marta)
+  // PRICE_MULTIPLIER = 1e9
 const PRICE_MULTIPLIER = 1e9;
 
 // Legacy fallback — only consulted if the dynamic cache from client.ts
@@ -210,7 +210,7 @@ export async function signOrder(
   const nonce = generateNonce();
   const expiration = generateExpiration(24); // 24 horas
 
-  // Convertir parámetros a formato EIP-712 (formato verificado por Marta)
+  // Convertir parámetros a formato EIP-712.
   const assetID = getAssetId(instrument)!; // checked above
   const contractSize = sizeToContractSize(size, instrument);
   
@@ -304,7 +304,7 @@ export async function signOrder(
 
 /**
  * Convertir orden firmada al formato de API de GRVT
- * ⚠️ ACTUALIZADO: formato verificado por Marta para endpoint /full/v1/create_order
+ * Formato para endpoint /full/v1/create_order.
  */
 export function formatSignedOrderForAPI(signedOrder: SignedOrder, instrument: string, size: string, price: string | undefined, side: 'buy' | 'sell'): any {
   const leg = signedOrder.legs[0];

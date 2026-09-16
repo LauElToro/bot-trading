@@ -26,7 +26,7 @@ export const useUiStore = create<UiState>()(
       toggleTheme: () => set((s) => ({ theme: s.theme === 'dark' ? 'light' : 'dark' })),
     }),
     {
-      name: 'grvt-grid-ui',
+      name: 'toro-ui',
       // Only persist the theme — sidebar state is per-session.
       partialize: (state) => ({ theme: state.theme }),
     }

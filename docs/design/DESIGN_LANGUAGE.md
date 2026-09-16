@@ -1,14 +1,14 @@
-# GRVT Grid — Design Language
+# Toro — Design Language
 
-> **Source of truth.** This document fixes every visual and interaction decision for the GRVT Grid dashboard. Don't renegotiate during implementation. Any deviation from this doc requires updating this doc first.
+> **Source of truth.** Visual decisions for the Toro dashboard (LauElToro).
 
-> **Status**: v1.0 — 2026-04-07
+> **Status**: v2.0 — 2026-09-16
 
 ---
 
 ## Executive summary
 
-GRVT Grid is a self-hosted real-time dashboard for grid trading bots on the GRVT perpetual futures exchange. The visual language is **Modernist Trading Terminal**: a dark-first, information-dense, opinionated interface that takes the data density of a Bloomberg terminal and the restraint of Linear/Vercel/Hyperliquid. No glow effects. No glassmorphism. No emoji. No playful tone. Numbers in tabular monospace, surfaces in flat dark elevations, color used semantically (green = up, red = down, amber = at risk, sky = action), motion used to convey state changes — never decoration.
+Toro is LauElToro’s self-hosted dashboard for grid trading on GRVT. The visual language is a **warm trading terminal**: dark espresso surfaces, gold accent, Outfit + IBM Plex Mono. Color is semantic (green = up, red = down, gold = action). No glow, no glassmorphism, no emoji.
 
 ---
 
@@ -40,16 +40,16 @@ GRVT Grid is a self-hosted real-time dashboard for grid trading bots on the GRVT
 
 ## 2. Color palette (dark mode — default)
 
-Base: a custom variation of the "Financial Dashboard" palette from the design system DB, adjusted for the GRVT Grid identity.
+Base: warm espresso surfaces and a gold accent for the Toro identity.
 
 ### Background hierarchy (3 levels of dark)
 
 | Token | Hex | Use |
 |---|---|---|
-| `bg-base` | `#020617` | Body background. Deepest void. |
-| `bg-surface` | `#0B1120` | Page sections, sidebar, header background. |
-| `bg-elevated` | `#0F172A` | Cards, modals, dropdowns. The "lifted" surface. |
-| `bg-muted` | `#1A2236` | Hover states on rows, secondary inputs, disabled fills. |
+| `bg-base` | `#0C0A08` | Body background. Warm black. |
+| `bg-surface` | `#161310` | Page sections, sidebar, header background. |
+| `bg-elevated` | `#1E1A16` | Cards, modals, dropdowns. |
+| `bg-muted` | `#2A241C` | Hover states on rows, secondary inputs. |
 
 ### Borders (subtle, multiple weights)
 
@@ -85,15 +85,15 @@ Base: a custom variation of the "Financial Dashboard" palette from the design sy
 
 ### Primary accent (CTA + active states)
 
-The most-used non-semantic color in the app. **Sky-400** (`#38BDF8`).
+The most-used non-semantic color in the app. **Gold** (`#E8B84A`).
 
 | Token | Hex | Use |
 |---|---|---|
-| `primary` | `#38BDF8` | Primary CTAs, active nav item, focus rings, links, range selectors |
-| `primary-strong` | `#0EA5E9` | Hover/pressed state |
-| `primary-soft` | `#0C2A3A` | Subtle background of primary badges, selected row in table |
+| `primary` | `#E8B84A` | Primary CTAs, active nav item, focus rings, links, range selectors |
+| `primary-strong` | `#D4A017` | Hover/pressed state |
+| `primary-soft` | `#2A2110` | Subtle background of primary badges, selected row in table |
 
-**Why sky and not purple/orange/green?**
+**Why gold?** Toro identity — warm, distinct from the exchange orange and from generic sky-blue SaaS.
 - Green is taken (success).
 - Red is taken (danger).
 - Amber is taken (warning).
@@ -153,20 +153,20 @@ Semantic colors are NOT inverted — green stays green, red stays red. Only satu
 
 **Two families. No more.**
 
-### Sans (UI): Inter
+### Sans (UI): Outfit
 
-The default for all UI text — labels, buttons, body copy, headings, navigation, tooltips. Inter is the gold standard for dense data interfaces (used by Linear, GitHub, Vercel, Coinbase, Stripe Dashboard). Free, open, served from Google Fonts. Excellent at all sizes including 11px.
+The default for all UI text — labels, buttons, body copy, headings, navigation, tooltips.
 
 ```css
-font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+font-family: 'Outfit', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
 ```
 
-### Mono (numbers, prices, addresses, IDs): JetBrains Mono
+### Mono (numbers, prices, addresses, IDs): IBM Plex Mono
 
-The ONE place where mono matters: any number that updates in real time, any wallet address, any order ID, any price, any percentage. JetBrains Mono ships with **tabular figures by default** (no extra config), looks identical at every digit width, and stays readable at 12px (which we'll use for table cells).
+The ONE place where mono matters: any number that updates in real time, any wallet address, any order ID, any price, any percentage.
 
 ```css
-font-family: 'JetBrains Mono', 'SF Mono', Monaco, Consolas, monospace;
+font-family: 'IBM Plex Mono', 'SF Mono', Monaco, Consolas, monospace;
 font-feature-settings: "tnum" 1, "calt" 0;
 ```
 

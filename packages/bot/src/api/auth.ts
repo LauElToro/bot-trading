@@ -1,6 +1,6 @@
 // GRVT Authentication Module - Fase 3
 // Auth via edge.grvt.io con cookie-based auth + IPv4 forzado
-// Implementado según specs verificadas por Marta
+// GRVT API key login flow.
 
 import dns from 'dns';
 import http from 'http';
@@ -48,7 +48,7 @@ export function createEmptyAuthState(): AuthState {
 let authState: AuthState = createEmptyAuthState();
 
 /**
- * Login a GRVT usando API key - flow verificado por Marta
+ * Login a GRVT usando API key.
  * POST https://edge.grvt.io/auth/api_key/login
  * Response: Set-Cookie: gravity=XXX + X-Grvt-Account-Id: XXX
  */

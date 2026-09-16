@@ -2,6 +2,8 @@ import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { useAuth } from '@/lib/auth-context';
+import { GRVT_REFERRAL_URL } from '@/lib/brand';
+import { BrandMark } from '@/components/brand-mark';
 import { Button } from '@/components/primitives/button';
 import { Input } from '@/components/primitives/input';
 import { LanguageToggle, useT } from '@/i18n';
@@ -34,13 +36,9 @@ export function LoginPage() {
         <div className="flex justify-end">
           <LanguageToggle />
         </div>
-        <div className="text-center">
-          <h1 className="text-2xl font-bold tracking-tight text-text-primary">
-            {t('header.brand')}
-          </h1>
-          <p className="text-sm text-text-muted mt-1">
-            {t('auth.login.subtitle')}
-          </p>
+        <div className="text-center space-y-3">
+          <BrandMark className="justify-center" />
+          <p className="text-sm text-text-muted">{t('auth.login.subtitle')}</p>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
@@ -83,6 +81,18 @@ export function LoginPage() {
           <Link to="/signup" className="text-primary hover:underline">
             {t('auth.login.signUp')}
           </Link>
+        </p>
+
+        <p className="text-2xs text-text-muted text-center">
+          {t('auth.login.needGrvt')}{' '}
+          <a
+            href={GRVT_REFERRAL_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-primary hover:underline"
+          >
+            {t('auth.login.grvtReferralCta')}
+          </a>
         </p>
       </div>
     </div>

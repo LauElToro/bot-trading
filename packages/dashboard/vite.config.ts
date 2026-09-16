@@ -4,7 +4,7 @@ import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import path from 'node:path';
 
-// Vite config for the GRVT Grid dashboard.
+// Vite config for the Toro dashboard.
 // - React 19 + Tailwind v4 plugin (no PostCSS config needed)
 // - Path alias `@/*` → `src/*`
 // - Dev proxy: /api/* and /ws → backend at localhost:3848 (override via env)

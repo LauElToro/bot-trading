@@ -1,4 +1,4 @@
-# GRVT Grid — self-host stack.
+# Toro — self-host stack.
 #
 # What this stack runs:
 #   - bot:      the trading engine + dashboard backend (Express + WS) + SPA

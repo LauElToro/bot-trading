@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# GRVT Grid — interactive installer.
+# Toro — interactive installer.
 #
 # Walks a self-hoster through:
 #   1. Verifying Docker + Docker Compose are installed
@@ -34,7 +34,7 @@ prompt()  { printf '%s? %s%s ' "$BOLD" "$1" "$RESET"; }
 
 require_repo_root() {
     if [[ ! -f docker-compose.yml ]] || [[ ! -d packages/bot ]]; then
-        err "Run this from the GRVT Grid repo root (where docker-compose.yml lives)."
+        err "Run this from the Toro repo root (where docker-compose.yml lives)."
         exit 1
     fi
 }
@@ -126,10 +126,7 @@ prompt_grvt_credentials() {
     heading "GRVT API credentials"
     cat <<EOF
 Get these from your GRVT account UI:
-  https://grvt.io  →  Account  →  API Keys
-
-IMPORTANT: register your GRVT account through the referral link the project
-shares (otherwise this self-host build is not authorized for redistribution).
+  https://grvt.io/?ref=5LBBEMJ  →  Account  →  API Keys
 
 EOF
     prompt_value GRVT_API_KEY        "Your GRVT API key (NOT the secret)"

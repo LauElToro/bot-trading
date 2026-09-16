@@ -1,4 +1,4 @@
-# GRVT Grid Notifier — sidecar Telegram worker.
+# Toro notifier — sidecar Telegram worker.
 # Reads the bot's SQLite file via a shared bind mount (read-only).
 
 FROM node:22-bookworm-slim AS builder

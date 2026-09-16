@@ -2,6 +2,7 @@ import { NavLink } from 'react-router-dom';
 import { FlaskConical, Hexagon, LayoutGrid, Settings } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import type { LucideIcon } from 'lucide-react';
+import { GRVT_REFERRAL_URL } from '@/lib/brand';
 import { useT } from '@/i18n';
 
 interface NavItem {
@@ -51,9 +52,17 @@ export function Sidebar() {
           </NavLink>
         ))}
       </nav>
-      <div className="px-3 pt-3 mt-2 border-t border-border-subtle">
-        <span className="text-2xs uppercase tracking-wider text-text-disabled">
-          v0.1.0 · B.5
+      <div className="px-3 pt-3 mt-2 border-t border-border-subtle space-y-1">
+        <a
+          href={GRVT_REFERRAL_URL}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="block text-2xs text-primary hover:underline"
+        >
+          {t('nav.referral')}
+        </a>
+        <span className="block text-2xs uppercase tracking-wider text-text-disabled">
+          {t('header.brand')}
         </span>
       </div>
     </aside>

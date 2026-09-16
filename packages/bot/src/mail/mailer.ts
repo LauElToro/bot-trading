@@ -50,7 +50,7 @@ export async function sendPasswordResetEmail(params: PasswordResetEmail): Promis
   await getTransporter().sendMail({
     from,
     to: params.to,
-    subject: 'Reset your GRVT Grid password',
+    subject: 'Reset your Toro password',
     text:
       `We received a request to reset the password for this account.\n\n` +
       `Click the link below to choose a new password:\n${params.resetUrl}\n\n` +

@@ -3,6 +3,8 @@ import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { api } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth-context';
+import { GRVT_REFERRAL_URL } from '@/lib/brand';
+import { BrandMark } from '@/components/brand-mark';
 import { Button } from '@/components/primitives/button';
 import { Input } from '@/components/primitives/input';
 import { Card } from '@/components/primitives/card';
@@ -57,13 +59,16 @@ export function GrvtOnboardingPage() {
         <div className="flex justify-end">
           <LanguageToggle />
         </div>
-        <div className="text-center">
-          <h1 className="text-2xl font-bold tracking-tight text-text-primary">
-            {t('onboarding.grvt.title')}
-          </h1>
-          <p className="text-sm text-text-muted mt-1">
-            {t('onboarding.grvt.subtitle')}
-          </p>
+        <div className="text-center space-y-3">
+          <BrandMark className="justify-center" />
+          <div>
+            <h1 className="text-2xl font-bold tracking-tight text-text-primary">
+              {t('onboarding.grvt.title')}
+            </h1>
+            <p className="text-sm text-text-muted mt-1">
+              {t('onboarding.grvt.subtitle')}
+            </p>
+          </div>
         </div>
 
         <Card>
@@ -71,7 +76,7 @@ export function GrvtOnboardingPage() {
             <p>
               {t('onboarding.grvt.instructionsPrefix')}
               <a
-                href="https://grvt.io"
+                href={GRVT_REFERRAL_URL}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-primary hover:underline"
@@ -79,6 +84,17 @@ export function GrvtOnboardingPage() {
                 grvt.io
               </a>
               {t('onboarding.grvt.instructionsSuffix')}
+            </p>
+            <p>
+              {t('onboarding.grvt.referralHint')}{' '}
+              <a
+                href={GRVT_REFERRAL_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-primary hover:underline"
+              >
+                {t('onboarding.grvt.referralCta')}
+              </a>
             </p>
             <p className="text-warning">
               {t('onboarding.grvt.encryptionNote')}

@@ -3,6 +3,8 @@ import { Link, useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { useAuth } from '@/lib/auth-context';
 import { api } from '@/lib/api-client';
+import { GRVT_REFERRAL_URL } from '@/lib/brand';
+import { BrandMark } from '@/components/brand-mark';
 import { Button } from '@/components/primitives/button';
 import { Input } from '@/components/primitives/input';
 import { useLang, LanguageToggle } from '@/i18n';
@@ -79,16 +81,19 @@ export function SignupPage() {
         <div className="flex justify-end">
           <LanguageToggle />
         </div>
-        <div className="text-center">
-          <h1 className="text-2xl font-bold tracking-tight text-text-primary">
-            {t('auth.signup.title')}
-          </h1>
-          <p className="text-sm text-text-muted mt-1">
-            {t('auth.signup.subtitle')}
-          </p>
+        <div className="text-center space-y-3">
+          <BrandMark className="justify-center" />
+          <div>
+            <h1 className="text-2xl font-bold tracking-tight text-text-primary">
+              {t('auth.signup.title')}
+            </h1>
+            <p className="text-sm text-text-muted mt-1">
+              {t('auth.signup.subtitle')}
+            </p>
+          </div>
         </div>
 
-        <div className="rounded-md border border-primary/40 bg-primary/5 p-4 space-y-2">
+        <div className="rounded-md border border-primary/40 bg-primary-soft p-4 space-y-2">
           <div className="text-xs font-medium text-text-primary">
             {t('auth.signup.grvtReferralTitle')}
           </div>
@@ -96,7 +101,7 @@ export function SignupPage() {
             {t('auth.signup.grvtReferralBody')}
           </p>
           <a
-            href="https://grvt.io/?ref=R3WLGZS"
+            href={GRVT_REFERRAL_URL}
             target="_blank"
             rel="noopener noreferrer"
             className="inline-block text-xs font-medium text-primary hover:underline"

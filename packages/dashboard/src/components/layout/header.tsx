@@ -1,10 +1,11 @@
-import { Activity, Moon, Sun } from 'lucide-react';
+import { Moon, Sun } from 'lucide-react';
 import { cn } from '@/lib/cn';
+import { BrandMark } from '@/components/brand-mark';
 import { useWsStatus } from '@/lib/use-ws-channel';
 import type { WsStatus } from '@/lib/ws-client';
 import { applyThemeToDocument, useUiStore } from '@/stores/ui-store';
 import { useEffect } from 'react';
-import { LanguageToggle, useT } from '@/i18n';
+import { LanguageToggle } from '@/i18n';
 
 const STATUS_KEY: Record<WsStatus, { color: string; key: string }> = {
   open: { color: 'text-success', key: 'wsLive' },
@@ -21,7 +22,6 @@ const WS_LABELS_FALLBACK: Record<string, string> = {
 };
 
 export function Header() {
-  const t = useT();
   const status = useWsStatus();
   const styles = STATUS_KEY[status];
   const theme = useUiStore((s) => s.theme);
@@ -40,12 +40,7 @@ export function Header() {
         'bg-bg-surface border-b border-border-subtle'
       )}
     >
-      <div className="flex items-center gap-2">
-        <Activity className="size-5 text-primary" aria-hidden="true" />
-        <span className="font-semibold tracking-tight text-text-primary">
-          {t('header.brand').toUpperCase()}
-        </span>
-      </div>
+      <BrandMark compact />
 
       <div className="flex-1" />
 

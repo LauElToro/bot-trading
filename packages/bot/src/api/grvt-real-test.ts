@@ -2,9 +2,9 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-console.log('🔧 Edison: Testing GRVT API with REAL endpoints...\n');
+console.log('Testing GRVT API with real endpoints...\n');
 
-// Test Market Data (público) - endpoints verificados por Marta
+// Test Market Data (público)
 async function testMarketDataDirect() {
   console.log('📊 Testing Market Data (sin auth)...\n');
   
@@ -114,7 +114,7 @@ async function testTradingAuth() {
 }
 
 async function runRealTests() {
-  console.log('🎯 Probando endpoints reales verificados por Marta...\n');
+  console.log('Probando endpoints reales...\n');
   
   await testMarketDataDirect();
   await testTradingAuth();

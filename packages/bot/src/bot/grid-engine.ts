@@ -2731,7 +2731,7 @@ export class GridBotInstance {
       // Each retry was logging the full error message + a separate
       // duplicate line carrying the stack trace. On 2026-06-07 this
       // single hot path produced ~2.75 GB/day, filling /var/log and
-      // taking grvtbot.com to 502. Now: log once, no stack for known
+      // taking the process to 502. Now: log once, no stack for known
       // user-recoverable errors. Pino's err serializer already
       // includes the stack for unknown errors.
       const msg = (error as Error).message ?? String(error);

@@ -1,14 +1,16 @@
-# GRVT Grid — Self-host install guide
+# Toro — Self-host install guide
 
-> **Audience**: people who want to run their own GRVT Grid bot on their own
+> **Audience**: people who want to run their own Toro bot on their own
 > server, with their own GRVT account, with their own keys. **No SaaS.** Your
 > trades, your keys, your liability.
+
+Si no tenés cuenta GRVT, registrate acá: [https://grvt.io/?ref=5LBBEMJ](https://grvt.io/?ref=5LBBEMJ)
 
 ## Prerequisites
 
 | Requirement | Why |
 |---|---|
-| **A GRVT account registered through the project's referral link** | Required to get repo access and to keep the project sustainable. Ask the maintainer for the link. |
+| **A GRVT account** | Create one with this referral: [grvt.io/?ref=5LBBEMJ](https://grvt.io/?ref=5LBBEMJ) |
 | **A Linux server** (or Mac, or Windows with WSL2) with Docker Engine ≥ 24 and Docker Compose v2 | The whole stack is containerized. No host Node install needed. |
 | **2 GB RAM** minimum, 1 vCPU is enough | The bot is ~110 MB, dashboard is static, notifier is tiny. |
 | **A GRVT API key + secret + sub-account id** | Generate from grvt.io → Account → API Keys |
@@ -18,9 +20,9 @@
 ## Quick install (5 minutes)
 
 ```bash
-# 1. Clone the private repo (you need access — contact maintainer)
-git clone https://github.com/<owner>/grvt-grid.git
-cd grvt-grid
+# 1. Clone
+git clone https://github.com/LauElToro/bot-trading.git
+cd bot-trading
 
 # 2. Run the interactive installer
 ./scripts/install.sh
@@ -41,8 +43,8 @@ the dashboard, and your bot will appear in the Overview.
 ## Manual install (if you want to skip the installer)
 
 ```bash
-git clone https://github.com/<owner>/grvt-grid.git
-cd grvt-grid
+git clone https://github.com/LauElToro/bot-trading.git
+cd bot-trading
 
 # 1. Create .env from the template and fill in your credentials
 cp .env.example .env

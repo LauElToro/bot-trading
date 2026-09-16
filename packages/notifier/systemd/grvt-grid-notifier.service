@@ -1,5 +1,5 @@
 [Unit]
-Description=GRVT Grid Notifier (Telegram)
+Description=Toro notifier (Telegram)
 After=network-online.target grvt-grid-bot.service
 Wants=network-online.target
 # Soft dependency on the bot — if the bot is down we still want the notifier

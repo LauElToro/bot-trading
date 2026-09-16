@@ -1,5 +1,6 @@
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/lib/auth-context';
+import { GRVT_REFERRAL_URL } from '@/lib/brand';
 import { Card } from '@/components/primitives/card';
 import { Button } from '@/components/primitives/button';
 import { Mono } from '@/components/primitives/mono';
@@ -121,7 +122,7 @@ export function SettingsPage() {
           {t('settings.referralBody')}
         </p>
         <a
-          href="https://grvt.io/?ref=R3WLGZS"
+          href={GRVT_REFERRAL_URL}
           target="_blank"
           rel="noopener noreferrer"
           className="inline-block mt-2 text-sm text-primary hover:underline"

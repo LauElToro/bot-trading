@@ -1,4 +1,4 @@
-// GRVT Grid Notifier — main worker loop.
+// Toro notifier — main worker loop.
 //
 // Runs as a standalone systemd service alongside the bot. Reads the bot's
 // SQLite file (read-only), detects new events, and pushes notifications
@@ -233,7 +233,7 @@ class Notifier {
     });
 
     log.info('sending hello message to telegram');
-    await this.telegram.send('🟢 *GRVT Grid Notifier online*');
+    await this.telegram.send('🟢 *Toro notifier online*');
     log.info('hello sent — scheduling first tick');
 
     this.scheduleNext();
@@ -496,7 +496,7 @@ class Notifier {
       this.healthServer.close();
       this.healthServer = null;
     }
-    await this.telegram.send('⚪ *GRVT Grid Notifier offline*');
+    await this.telegram.send('⚪ *Toro notifier offline*');
     await this.db.close();
     log.info('notifier stopped');
   }

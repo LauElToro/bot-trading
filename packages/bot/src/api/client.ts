@@ -15,7 +15,7 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-// Endpoints GRVT verificados por Marta
+// Endpoints GRVT.
 const MARKET_DATA_URL = 'https://market-data.grvt.io/full/v1';
 const TRADING_URL = 'https://trades.grvt.io/full/v1';
 

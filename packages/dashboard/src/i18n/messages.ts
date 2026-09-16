@@ -62,9 +62,10 @@ export const MESSAGES = {
       logout: 'Cerrar sesión',
       account: 'Cuenta',
       help: 'Ayuda',
+      referral: 'Abrir GRVT con mi referido',
     },
     header: {
-      brand: 'GRVT Grid',
+      brand: 'Toro',
       welcome: 'Hola',
       keyboardShortcuts: 'Atajos de teclado',
       loggedInAs: 'Conectado como',
@@ -79,7 +80,7 @@ export const MESSAGES = {
     auth: {
       signup: {
         title: 'Crear cuenta',
-        subtitle: 'Bot grid gratuito para futuros perpetuos de GRVT',
+        subtitle: 'Bot grid de LauElToro para futuros de GRVT',
         email: 'Email',
         password: 'Contraseña (mín. 8 caracteres)',
         confirmPassword: 'Confirmar contraseña',
@@ -94,13 +95,15 @@ export const MESSAGES = {
         signupFailed: 'Falló el signup',
         grvtReferralTitle: '¿Todavía no tenés cuenta en GRVT?',
         grvtReferralBody:
-          'Este bot opera sobre tu cuenta de GRVT vía API — necesitás una antes de poder usarlo. Si te creás la cuenta con nuestro link de referido recibís beneficios y nos ayudás a sostener el proyecto.',
-        grvtReferralLink: '→ Crear cuenta GRVT (referido)',
-        grvtReferralAfter: '¿Ya tenés GRVT? Continuá con el signup acá abajo.',
+          'El bot opera sobre tu cuenta de GRVT. Creala con mi código de referido y recibís los beneficios de GRVT.',
+        grvtReferralLink: '→ Crear cuenta GRVT con mi referido',
+        grvtReferralAfter: '¿Ya tenés GRVT? Continuá con el registro acá abajo.',
       },
       login: {
         title: 'Iniciar sesión',
         subtitle: 'Accedé a tu bot grid',
+        needGrvt: '¿Todavía no tenés GRVT?',
+        grvtReferralCta: 'Creá tu cuenta con mi referido',
         email: 'Email',
         password: 'Contraseña',
         loginBtn: 'Entrar',
@@ -158,6 +161,8 @@ export const MESSAGES = {
         subAccountId: 'Sub-Account ID (opcional)',
         subAccountIdHint:
           'Si lo dejás vacío usamos el Account ID. Solo cambialo si tenés varias sub-cuentas.',
+        referralHint: 'Si todavía no tenés cuenta, registrate con mi referido:',
+        referralCta: 'grvt.io/?ref=5LBBEMJ',
         saveBtn: 'Guardar credenciales',
         saving: 'Guardando y testeando…',
         saved: 'Credenciales de GRVT guardadas',
@@ -465,7 +470,7 @@ export const MESSAGES = {
       sameOrigin: '(mismo origen)',
       auth: 'Auth',
       referralBody:
-        'Este bot es gratis. Si todavía no tenés cuenta en GRVT, registrate con nuestro link de referido para recibir bonos:',
+        'Si todavía no tenés cuenta en GRVT, registrate con mi código de referido (5LBBEMJ) para recibir los bonos de GRVT:',
       referralCta: 'Crear cuenta en GRVT →',
       account: {
         email: 'Email',
@@ -804,9 +809,10 @@ export const MESSAGES = {
       logout: 'Log out',
       account: 'Account',
       help: 'Help',
+      referral: 'Open GRVT with my referral',
     },
     header: {
-      brand: 'GRVT Grid',
+      brand: 'Toro',
       welcome: 'Hi',
       keyboardShortcuts: 'Keyboard shortcuts',
       loggedInAs: 'Logged in as',
@@ -821,7 +827,7 @@ export const MESSAGES = {
     auth: {
       signup: {
         title: 'Create account',
-        subtitle: 'Free grid trading bot for GRVT perpetual futures',
+        subtitle: 'LauElToro’s grid bot for GRVT perpetuals',
         email: 'Email',
         password: 'Password (min 8 characters)',
         confirmPassword: 'Confirm password',
@@ -836,13 +842,15 @@ export const MESSAGES = {
         signupFailed: 'Signup failed',
         grvtReferralTitle: 'Don’t have a GRVT account yet?',
         grvtReferralBody:
-          'This bot trades on your GRVT account via API — you need one before you can use it. If you sign up with our referral link you get benefits and help support the project.',
-        grvtReferralLink: '→ Create GRVT account (referral)',
+          'The bot trades on your GRVT account. Sign up with my referral code to get GRVT’s signup benefits.',
+        grvtReferralLink: '→ Create a GRVT account with my referral',
         grvtReferralAfter: 'Already have GRVT? Continue with the signup below.',
       },
       login: {
         title: 'Sign in',
         subtitle: 'Access your grid bot',
+        needGrvt: 'Don’t have GRVT yet?',
+        grvtReferralCta: 'Create your account with my referral',
         email: 'Email',
         password: 'Password',
         loginBtn: 'Sign in',
@@ -900,6 +908,8 @@ export const MESSAGES = {
         subAccountId: 'Sub-Account ID (optional)',
         subAccountIdHint:
           'Leave empty and we’ll use the Account ID. Only change if you have several sub-accounts.',
+        referralHint: 'If you don’t have an account yet, sign up with my referral:',
+        referralCta: 'grvt.io/?ref=5LBBEMJ',
         saveBtn: 'Save credentials',
         saving: 'Saving & testing…',
         saved: 'GRVT credentials saved',
@@ -1207,7 +1217,7 @@ export const MESSAGES = {
       sameOrigin: '(same origin)',
       auth: 'Auth',
       referralBody:
-        'This bot is free to use. If you don’t have a GRVT account yet, sign up through our referral link for bonuses:',
+        'If you don’t have a GRVT account yet, sign up with my referral code (5LBBEMJ) to get GRVT’s bonuses:',
       referralCta: 'Sign up on GRVT →',
       account: {
         email: 'Email',

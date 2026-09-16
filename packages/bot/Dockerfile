@@ -1,4 +1,4 @@
-# Multi-stage build for the GRVT Grid bot.
+# Multi-stage build for the Toro bot.
 #
 # Stage 1 (bot-builder): build the bot TypeScript + compile sqlite3 native
 # bindings against a glibc base.

@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { toast } from 'sonner';
 import { api } from '@/lib/api-client';
+import { BrandMark } from '@/components/brand-mark';
 import { Button } from '@/components/primitives/button';
 import { Input } from '@/components/primitives/input';
 import { LanguageToggle, useT } from '@/i18n';
@@ -32,7 +33,8 @@ export function ForgotPasswordPage() {
         <div className="flex justify-end">
           <LanguageToggle />
         </div>
-        <div className="text-center">
+        <div className="text-center space-y-3">
+          <BrandMark className="justify-center" />
           <h1 className="text-2xl font-bold tracking-tight text-text-primary">
             {t('auth.forgotPassword.title')}
           </h1>
