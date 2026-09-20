@@ -14,7 +14,7 @@ import request from 'supertest';
 import { createV2Router } from '../src/server/v2-router.js';
 
 // ── In-memory DB with stateful bot rows ──────────────────────────────
-// Lighter than a real sqlite for these tests — we only need to track
+// Lighter than a real PostgreSQL instance for these tests — we only need to track
 // bot rows so requireBotOwnership() and the duplicate-instrument guard
 // can read them, and the cache invalidation has something to invalidate.
 
@@ -29,42 +29,37 @@ function makeMockDb() {
   const bots: BotRow[] = [];
   let nextId = 1;
   return {
-    all(sql: string, params: unknown[], cb: (err: Error | null, rows: unknown[]) => void) {
+    async all(sql: string, params: unknown[] = []) {
       // Duplicate-instrument guard (POST /bots)
       if (sql.includes('COUNT(*)') && sql.includes('pair')) {
         const pair = params[1];
         const c = bots.filter((b) => b.pair === pair && b.status !== 'stopped').length;
-        cb(null, [{ c }]);
-        return;
+        return [{ c }];
       }
       // GET /bots
       if (sql.includes('SELECT') && sql.includes('grid_bots') && sql.includes('ORDER BY')) {
-        cb(null, [...bots]);
-        return;
+        return [...bots];
       }
-      cb(null, []);
+      return [];
     },
-    get(sql: string, params: unknown[], cb: (err: Error | null, row: unknown) => void) {
+    async get(sql: string, params: unknown[] = []) {
       if (sql.includes('COUNT(*)') && sql.includes('pair')) {
         const pair = params[1];
         const c = bots.filter((b) => b.pair === pair && b.status !== 'stopped').length;
-        cb(null, { c });
-        return;
+        return { c };
       }
       if (sql.includes('COUNT(*)') && sql.includes('running')) {
-        cb(null, { c: bots.filter((b) => b.status === 'running').length });
-        return;
+        return { c: bots.filter((b) => b.status === 'running').length };
       }
       // Bot ownership lookup: SELECT id, user_id, pair, status FROM grid_bots WHERE id = ?
       if (sql.includes('SELECT') && sql.includes('user_id') && sql.includes('id = ?')) {
         const id = params[0] as number;
-        cb(null, bots.find((b) => b.id === id));
-        return;
+        return bots.find((b) => b.id === id);
       }
-      cb(null, undefined);
+      return undefined;
     },
-    run(_sql: string, _params: unknown[], cb: (this: { changes: number; lastID: number }, err: Error | null) => void) {
-      cb.call({ changes: 1, lastID: 99 }, null);
+    async run(_sql: string, _params: unknown[] = []) {
+      return { changes: 1, lastID: 99 };
     },
     _bots: bots,
     _addBot(pair: string, status: BotRow['status'] = 'paused', userId = '00000000-0000-4000-8000-000000000001'): BotRow {

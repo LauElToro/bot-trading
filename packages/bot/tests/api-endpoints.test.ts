@@ -9,6 +9,7 @@ import request from 'supertest';
 import { createV2Router } from '../src/server/v2-router.js';
 import * as factory from '../src/api/grvt-client-factory.js';
 import { TEST_OPERATOR_USER_ID } from '../src/auth/user-id.js';
+import { hashPassword } from '../src/auth/passwords.js';
 
 vi.mock('../src/api/grvt-client-factory.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/api/grvt-client-factory.js')>();
@@ -19,59 +20,60 @@ vi.mock('../src/api/grvt-client-factory.js', async (importOriginal) => {
   };
 });
 
+vi.mock('../src/mail/mailer.js', () => ({
+  isMailerConfigured: vi.fn(() => true),
+  sendAuthenticationCode: vi.fn().mockResolvedValue(true),
+  sendPasswordResetEmail: vi.fn().mockResolvedValue(undefined),
+  sendWelcomeEmail: vi.fn().mockResolvedValue(undefined),
+}));
+
 // ── Mock deps ────────────────────────────────────────────────────────
 // The router takes injected deps — we provide fakes that return
 // controlled data so we can test handler logic in isolation.
 
-// Minimal in-memory "database" using callbacks matching sqlite3 shape
+// Minimal in-memory async query executor matching the PostgreSQL facade.
 function makeMockDb() {
   const rows: Record<string, any[]> = {};
   return {
-    all(sql: string, params: any[], cb: (err: Error | null, rows: any[]) => void) {
+    async all(sql: string, params: any[] = []) {
       // C.9: duplicate check
       if (sql.includes('COUNT(*)') && sql.includes('grid_bots') && sql.includes('status')) {
         const pair = params[1];
         const active = (rows['bots'] ?? []).filter(
           (b: any) => b.pair === pair && (b.status === 'running' || b.status === 'paused')
         );
-        cb(null, [{ c: active.length }]);
-        return;
+        return [{ c: active.length }];
       }
       // GET /bots
       if (sql.includes('SELECT') && sql.includes('grid_bots') && sql.includes('ORDER BY')) {
-        cb(null, rows['bots'] ?? []);
-        return;
+        return rows['bots'] ?? [];
       }
-      cb(null, []);
+      return [];
     },
-    get(sql: string, params: any[], cb: (err: Error | null, row: any) => void) {
+    async get(sql: string, params: any[] = []) {
       // C.9: duplicate instrument check (has "pair = ?" in the SQL)
       if (sql.includes('COUNT(*)') && sql.includes('pair')) {
         const pair = params[1]; // [userId, pair]
         const active = (rows['bots'] ?? []).filter(
           (b: any) => b.pair === pair && (b.status === 'running' || b.status === 'paused')
         );
-        cb(null, { c: active.length });
-        return;
+        return { c: active.length };
       }
       // Health: running bots count (no "pair" in the SQL)
       if (sql.includes('COUNT(*)') && sql.includes('running')) {
         const running = (rows['bots'] ?? []).filter((b: any) => b.status === 'running');
-        cb(null, { c: running.length });
-        return;
+        return { c: running.length };
       }
       // Bot ownership check
       if (sql.includes('SELECT') && sql.includes('grid_bots') && sql.includes('id = ?')) {
         const id = params[0];
-        const bot = (rows['bots'] ?? []).find((b: any) => b.id === id);
-        cb(null, bot);
-        return;
+        return (rows['bots'] ?? []).find((b: any) => b.id === id);
       }
-      cb(null, undefined);
+      return undefined;
     },
-    run(sql: string, params: any[], cb: (this: { changes: number; lastID: number }, err: Error | null) => void) {
+    async run(_sql: string, _params: any[] = []) {
       // INSERT/UPDATE: just succeed
-      cb.call({ changes: 1, lastID: 99 }, null);
+      return { changes: 1, lastID: 99 };
     },
     _rows: rows,
     _addBot(bot: any) {
@@ -523,6 +525,7 @@ describe('POST /api/v2/auth/signup — H-5 ADMIN_EMAIL gate', () => {
       getUserByEmail: vi.fn().mockResolvedValue(null),
       countUsers: vi.fn().mockResolvedValue(0),
       createUser: vi.fn().mockResolvedValue('11111111-1111-4111-8111-111111111111'),
+      createEmailOtpChallenge: vi.fn().mockResolvedValue(undefined),
       hasGrvtCredentials: vi.fn().mockResolvedValue(false),
       insertRefreshToken: vi.fn().mockResolvedValue(undefined),
       findRefreshToken: vi.fn().mockResolvedValue(null),
@@ -558,7 +561,7 @@ describe('POST /api/v2/auth/signup — H-5 ADMIN_EMAIL gate', () => {
       .send({ email: 'whoever@example.com', password: 'supersecret' });
 
     expect(res.status).toBe(200);
-    expect(res.body.isAdmin).toBe(false);
+    expect(res.body.requiresOtp).toBe(true);
     expect(gridBotDb.createUser).toHaveBeenCalledWith(
       expect.objectContaining({ is_admin: false })
     );
@@ -574,7 +577,7 @@ describe('POST /api/v2/auth/signup — H-5 ADMIN_EMAIL gate', () => {
       .send({ email: 'OWNER@Example.com', password: 'supersecret' });
 
     expect(res.status).toBe(200);
-    expect(res.body.isAdmin).toBe(true);
+    expect(res.body.requiresOtp).toBe(true);
     expect(gridBotDb.createUser).toHaveBeenCalledWith(
       expect.objectContaining({ is_admin: true, email: 'owner@example.com' })
     );
@@ -592,10 +595,79 @@ describe('POST /api/v2/auth/signup — H-5 ADMIN_EMAIL gate', () => {
       .send({ email: 'attacker@example.com', password: 'supersecret' });
 
     expect(res.status).toBe(200);
-    expect(res.body.isAdmin).toBe(false);
+    expect(res.body.requiresOtp).toBe(true);
     expect(gridBotDb.createUser).toHaveBeenCalledWith(
       expect.objectContaining({ is_admin: false })
     );
+  });
+});
+
+describe('POST /api/v2/auth/verify-otp', () => {
+  async function makeOtpApp(code: string) {
+    const codeHash = await hashPassword(code);
+    const userId = '11111111-1111-4111-8111-111111111111';
+    const gridBotDb = {
+      ...makeMockGridBotDb(),
+      getEmailOtpChallenge: vi.fn().mockResolvedValue({
+        id: 'a'.repeat(48),
+        user_id: userId,
+        purpose: 'login',
+        code_hash: codeHash,
+        expires_at: Date.now() + 60_000,
+        consumed_at: null,
+        attempts: 0,
+      }),
+      incrementEmailOtpAttempts: vi.fn().mockResolvedValue(undefined),
+      consumeEmailOtpChallenge: vi.fn().mockResolvedValue(true),
+      getUserById: vi.fn().mockResolvedValue({
+        id: userId,
+        email: 'user@example.com',
+        password_hash: 'hash',
+        email_verified: 1,
+        is_admin: 0,
+        google_sub: null,
+        created_at: Date.now(),
+        last_login_at: null,
+      }),
+      markUserEmailVerified: vi.fn().mockResolvedValue(undefined),
+      updateUserLastLogin: vi.fn().mockResolvedValue(undefined),
+      hasGrvtCredentials: vi.fn().mockResolvedValue(false),
+    };
+    const router = createV2Router({
+      db: makeMockDb() as any,
+      gridBotDb: gridBotDb as any,
+      grvtClient: makeMockGrvtClient() as any,
+      engineOps: makeMockEngineOps(),
+      apiKey: API_KEY,
+    });
+    const app = express();
+    app.use(express.json());
+    app.use('/api/v2', router);
+    return { app, gridBotDb };
+  }
+
+  it('issues a session only after the correct one-time code', async () => {
+    const { app, gridBotDb } = await makeOtpApp('123456');
+    const res = await request(app)
+      .post('/api/v2/auth/verify-otp')
+      .send({ challengeId: 'a'.repeat(48), code: '123456' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.token).toBeTypeOf('string');
+    expect(gridBotDb.consumeEmailOtpChallenge).toHaveBeenCalledWith('a'.repeat(48));
+    expect(gridBotDb.markUserEmailVerified).toHaveBeenCalled();
+  });
+
+  it('counts an invalid attempt without issuing a session', async () => {
+    const { app, gridBotDb } = await makeOtpApp('123456');
+    const res = await request(app)
+      .post('/api/v2/auth/verify-otp')
+      .send({ challengeId: 'a'.repeat(48), code: '654321' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('invalid_or_expired_code');
+    expect(gridBotDb.incrementEmailOtpAttempts).toHaveBeenCalled();
+    expect(gridBotDb.consumeEmailOtpChallenge).not.toHaveBeenCalled();
   });
 });
 
@@ -679,7 +751,9 @@ describe('POST /api/v2/auth/forgot-password — C-3 Host header', () => {
     // the configured-but-cannot-build-URL branch (not the unknown-
     // email branch).
     (gridBotDb as any).getUserByEmail = vi.fn().mockResolvedValue({
-      id: 1, email: 'victim@example.com', password_hash: 'x',
+      id: '11111111-1111-4111-8111-111111111111',
+      email: 'victim@example.com',
+      password_hash: 'x',
     });
     (gridBotDb as any).invalidateOpenPasswordResetTokensForUser = vi.fn().mockResolvedValue(undefined);
     (gridBotDb as any).insertPasswordResetToken = vi.fn().mockResolvedValue(undefined);

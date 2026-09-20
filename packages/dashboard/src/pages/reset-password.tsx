@@ -28,7 +28,7 @@ export function ResetPasswordPage() {
     try {
       await api.resetPassword(token, password);
       toast.success(t('auth.resetPassword.successBody'));
-      navigate('/login', { replace: true });
+      navigate('/dashboard/login', { replace: true });
     } catch (err) {
       toast.error((err as Error).message || t('auth.resetPassword.failed'));
     } finally {
@@ -49,7 +49,7 @@ export function ResetPasswordPage() {
           <p className="text-sm text-text-muted">
             {t('auth.resetPassword.missingToken')}
           </p>
-          <Link to="/forgot-password" className="text-primary hover:underline text-sm">
+          <Link to="/dashboard/forgot-password" className="text-primary hover:underline text-sm">
             {t('auth.forgotPassword.sendBtn')}
           </Link>
         </div>
@@ -107,7 +107,7 @@ export function ResetPasswordPage() {
         </form>
 
         <p className="text-xs text-text-muted text-center">
-          <Link to="/login" className="text-primary hover:underline">
+          <Link to="/dashboard/login" className="text-primary hover:underline">
             {t('auth.resetPassword.backToLogin')}
           </Link>
         </p>

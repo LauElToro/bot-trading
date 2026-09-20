@@ -1,10 +1,10 @@
 import { Router, type Request, type Response, type NextFunction } from 'express';
 import rateLimit from 'express-rate-limit';
-import type Database from 'sqlite3';
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, randomBytes, randomInt } from 'node:crypto';
 import { childLogger } from './logger.js';
 import { cache } from './cache.js';
 import type { GridBotDB } from '../database/db.js';
+import type { QueryExecutor, RunResult } from '../database/postgres.js';
 import { hashPassword, verifyPassword } from '../auth/passwords.js';
 import {
   signTokenPair,
@@ -16,6 +16,7 @@ import {
 import { encryptCredentialFields } from '../auth/crypto.js';
 import {
   sendPasswordResetEmail,
+  sendAuthenticationCode,
   sendWelcomeEmail,
   isMailerConfigured,
 } from '../mail/mailer.js';
@@ -90,7 +91,7 @@ interface EngineOps {
 }
 
 export interface V2RouterDeps {
-  db: Database.Database;
+  db: QueryExecutor;
   // Multi-tenant: high-level wrapper for user/credential/terms CRUD.
   gridBotDb: GridBotDB;
   grvtClient: GrvtClient;
@@ -106,35 +107,28 @@ function round(n: number, digits: number): number {
   return Math.round(n * f) / f;
 }
 
-function dbAll<T = unknown>(db: Database.Database, sql: string, params: unknown[] = []): Promise<T[]> {
-  return new Promise((resolve, reject) => {
-    db.all(sql, params, (err, rows) => {
-      if (err) reject(err);
-      else resolve((rows as T[]) ?? []);
-    });
-  });
-}
-
-function dbGet<T = unknown>(db: Database.Database, sql: string, params: unknown[] = []): Promise<T | undefined> {
-  return new Promise((resolve, reject) => {
-    db.get(sql, params, (err, row) => {
-      if (err) reject(err);
-      else resolve(row as T | undefined);
-    });
-  });
-}
-
-function dbRun(
-  db: Database.Database,
+async function dbAll<T = unknown>(
+  db: QueryExecutor,
   sql: string,
   params: unknown[] = []
-): Promise<{ changes: number; lastID: number }> {
-  return new Promise((resolve, reject) => {
-    db.run(sql, params, function (this: { changes: number; lastID: number }, err) {
-      if (err) reject(err);
-      else resolve({ changes: this.changes, lastID: this.lastID });
-    });
-  });
+): Promise<T[]> {
+  return db.all(sql, params) as Promise<T[]>;
+}
+
+async function dbGet<T = unknown>(
+  db: QueryExecutor,
+  sql: string,
+  params: unknown[] = []
+): Promise<T | undefined> {
+  return db.get(sql, params) as Promise<T | undefined>;
+}
+
+async function dbRun(
+  db: QueryExecutor,
+  sql: string,
+  params: unknown[] = []
+): Promise<RunResult> {
+  return db.run(sql, params);
 }
 
 // ─── Auth middleware ───────────────────────────────────────────────────
@@ -187,7 +181,7 @@ function makeAuthMiddleware(apiKey: string, gridBotDb: GridBotDB) {
 // doesn't exist or belongs to a different user. Returns the bot row
 // for downstream use so handlers don't have to re-fetch.
 async function requireBotOwnership(
-  db: Database.Database,
+  db: QueryExecutor,
   botId: number,
   userId: UserId
 ): Promise<{ id: number; user_id: UserId | null; pair: string; status: string }> {
@@ -343,11 +337,67 @@ const SIGNUP_LIMITER = makeAuthLimiter(3, 60 * 60 * 1000);
 // Password reset: 3 per hour. Stops email-bombing a known address. Stricter
 // than login because each call triggers an outbound email + DB write.
 const RESET_LIMITER = makeAuthLimiter(3, 60 * 60 * 1000);
+// OTP issuance/resend sends email and is intentionally stricter than verification.
+const OTP_SEND_LIMITER = makeAuthLimiter(5, 60 * 60 * 1000);
+const OTP_VERIFY_LIMITER = makeAuthLimiter(10, 15 * 60 * 1000);
+
+const OTP_TTL_MS = 10 * 60 * 1000;
+const OTP_TTL_MINUTES = 10;
+const OTP_MAX_ATTEMPTS = 5;
 
 // ─── The router ────────────────────────────────────────────────────────
 export function createV2Router(deps: V2RouterDeps): Router {
   const { db, gridBotDb, grvtClient, engineOps, apiKey } = deps;
   const router = Router();
+
+  const maskEmail = (email: string): string => {
+    const [local = '', domain = ''] = email.split('@');
+    const visible = local.slice(0, 2);
+    return `${visible}${'*'.repeat(Math.max(2, local.length - 2))}@${domain}`;
+  };
+
+  async function issueEmailOtp(params: {
+    userId: UserId;
+    email: string;
+    purpose: 'signup' | 'login';
+    lang: 'es' | 'en';
+    req: Request;
+  }) {
+    const code = String(randomInt(0, 1_000_000)).padStart(6, '0');
+    const challengeId = randomBytes(24).toString('hex');
+    const codeHash = await hashPassword(code);
+    const expiresAt = Date.now() + OTP_TTL_MS;
+    const ipAddress =
+      (params.req.headers['x-forwarded-for'] as string | undefined)?.split(',')[0]?.trim() ||
+      params.req.ip ||
+      null;
+    await gridBotDb.createEmailOtpChallenge({
+      id: challengeId,
+      user_id: params.userId,
+      purpose: params.purpose,
+      code_hash: codeHash,
+      expires_at: expiresAt,
+      ip_address: ipAddress,
+    });
+    const mailed = await sendAuthenticationCode({
+      to: params.email,
+      code,
+      purpose: params.purpose,
+      lang: params.lang,
+      expiresInMinutes: OTP_TTL_MINUTES,
+    });
+    if (!mailed) {
+      const error = new Error('email delivery is not configured') as Error & { status?: number };
+      error.status = 503;
+      throw error;
+    }
+    return {
+      requiresOtp: true as const,
+      challengeId,
+      emailHint: maskEmail(params.email),
+      expiresIn: OTP_TTL_MS / 1000,
+    };
+  }
 
   // ─── Public auth endpoints (NO middleware) ──────────────────────
   // Register these BEFORE the auth middleware so signup/login don't
@@ -364,11 +414,11 @@ export function createV2Router(deps: V2RouterDeps): Router {
   // part of `terms_version` (e.g. "2026-05-26-v3-es") so audit logs
   // record exactly which translation the user agreed to. Both
   // translations are legally equivalent for the operator's purposes.
-  const SIGNUP_TOS_VERSION = '2026-09-16-v4';
+  const SIGNUP_TOS_VERSION = '2026-09-20-v5';
   const SIGNUP_TOS_TEXT_EN = `Terms of Use — please read carefully before creating an account.
 
 1. WHAT THIS SERVICE IS
-This is a self-hosted grid trading bot for the GRVT perpetual futures exchange. By signing up, you authorize the bot to place, modify, and cancel orders on your GRVT sub-account using API credentials you provide.
+This is a grid trading platform for the GRVT perpetual futures exchange. By signing up, you authorize the bot to place, modify, and cancel orders on your GRVT sub-account using API credentials you provide.
 
 2. WHAT THIS SERVICE IS NOT
 The operator is not a broker, custodian, financial advisor, fiduciary, exchange, or registered investment professional. No part of this service constitutes investment, legal, tax, or financial advice. The operator never holds your funds — your funds stay on your GRVT account at all times.
@@ -389,7 +439,7 @@ The operator makes no uptime commitment. The service may be paused, degraded, or
 This service depends on: GRVT (exchange, API, matching engine, custody), the underlying blockchain network, internet infrastructure, the cloud provider hosting this server, the operating system, runtime libraries, and email delivery providers. The operator has no control over and accepts no responsibility for any failure, outage, change in terms, downtime, hack, exploit, slippage, or malicious behavior of any of these third parties. Risks include but are not limited to: GRVT outages, GRVT API rate limits or changes, exchange insolvency, smart contract bugs, network congestion, oracle failure, and DNS or TLS provider compromise.
 
 8. DATA HANDLING + ENCRYPTION
-The bot stores your email, a bcrypt hash of your password, and your GRVT API credentials encrypted at rest with AES-256-GCM. The master encryption key lives on the server's disk so the bot can decrypt credentials to place orders. THIS MEANS the server operator has technical access to decrypt your credentials, and any party who compromises the server (attacker, employee, hosting provider, law enforcement) may also gain that access. If you require zero third-party access to your keys, run your own copy (https://github.com/LauElToro/bot-trading). By using this instance you accept this exposure.
+The bot stores your email, a bcrypt hash of your password, and your GRVT API credentials encrypted at rest with AES-256-GCM. The master encryption key lives on the server's disk so the bot can decrypt credentials to place orders. THIS MEANS the server operator has technical access to decrypt your credentials, and any party who compromises the server (attacker, employee, hosting provider, law enforcement) may also gain that access. By using this instance you accept this exposure.
 
 9. SECURITY INCIDENTS
 In the event of a server compromise, data breach, credential theft, fund loss, or any other security incident — whether caused by an attacker, by a bug, by the operator, by an upstream provider, or by force majeure — you waive any claim against the operator for direct, indirect, incidental, consequential, special, punitive, or exemplary damages, including but not limited to lost funds, lost profits, lost opportunity, missed trades, liquidations, unwanted positions, regulatory fines, or reputational harm. You acknowledge that the operator's only obligation following an incident is to attempt timely notification — there is no compensation, refund, or insurance.
@@ -415,7 +465,7 @@ By clicking "I have read and accept the terms above" and creating an account, yo
   const SIGNUP_TOS_TEXT_ES = `Términos de Uso — leé con atención antes de crear una cuenta.
 
 1. QUÉ ES ESTE SERVICIO
-Esto es un bot grid de trading autohospedado para la exchange de futuros perpetuos GRVT. Al registrarte, autorizás al bot a colocar, modificar y cancelar órdenes en tu sub-cuenta de GRVT usando las credenciales API que vos provees.
+Esto es una plataforma de grid trading para la exchange de futuros perpetuos GRVT. Al registrarte, autorizás al bot a colocar, modificar y cancelar órdenes en tu sub-cuenta de GRVT usando las credenciales API que vos provees.
 
 2. QUÉ NO ES ESTE SERVICIO
 El operador no es un broker, custodio, asesor financiero, fiduciario, exchange ni profesional registrado en inversiones. Ninguna parte de este servicio constituye asesoramiento de inversión, legal, impositivo o financiero. El operador nunca tiene tus fondos — tus fondos quedan siempre en tu cuenta de GRVT.
@@ -436,7 +486,7 @@ El operador no se compromete a ningún uptime. El servicio puede ser pausado, de
 Este servicio depende de: GRVT (exchange, API, motor de matching, custodia), la red blockchain subyacente, infraestructura de internet, el proveedor de cloud que aloja este servidor, el sistema operativo, librerías de runtime y proveedores de envío de email. El operador no tiene control y no acepta responsabilidad por ninguna falla, caída, cambio en términos, downtime, hackeo, exploit, slippage o comportamiento malicioso de ninguno de estos terceros. Los riesgos incluyen, sin limitarse a: caídas de GRVT, límites o cambios en su API, insolvencia del exchange, bugs en smart contracts, congestión de red, fallas de oráculos y compromiso del proveedor de DNS o TLS.
 
 8. MANEJO DE DATOS + CIFRADO
-El bot guarda tu email, un hash bcrypt de tu contraseña, y tus credenciales API de GRVT cifradas en reposo con AES-256-GCM. La clave maestra de cifrado vive en el disco del servidor para que el bot pueda descifrar las credenciales al colocar órdenes. ESTO SIGNIFICA que el operador del servidor tiene acceso técnico para descifrar tus credenciales, y cualquier parte que comprometa el servidor (atacante, empleado, proveedor de hosting, autoridad gubernamental) también puede obtener ese acceso. Si necesitás acceso cero por parte de terceros a tus claves, corré tu propia copia (https://github.com/LauElToro/bot-trading). Al usar esta instancia aceptás esta exposición.
+El bot guarda tu email, un hash bcrypt de tu contraseña, y tus credenciales API de GRVT cifradas en reposo con AES-256-GCM. La clave maestra de cifrado vive en el disco del servidor para que el bot pueda descifrar las credenciales al colocar órdenes. ESTO SIGNIFICA que el operador del servidor tiene acceso técnico para descifrar tus credenciales, y cualquier parte que comprometa el servidor (atacante, empleado, proveedor de hosting, autoridad gubernamental) también puede obtener ese acceso. Al usar esta instancia aceptás esta exposición.
 
 9. INCIDENTES DE SEGURIDAD
 En caso de compromiso del servidor, brecha de datos, robo de credenciales, pérdida de fondos o cualquier otro incidente de seguridad — sea causado por un atacante, por un bug, por el operador, por un proveedor upstream o por fuerza mayor — vos renunciás a cualquier reclamo contra el operador por daños directos, indirectos, incidentales, consecuentes, especiales, punitivos o ejemplares, incluyendo, sin limitarse a, fondos perdidos, ganancias perdidas, oportunidades perdidas, trades perdidos, liquidaciones, posiciones no deseadas, multas regulatorias o daño reputacional. Reconocés que la única obligación del operador tras un incidente es intentar notificar oportunamente — no hay compensación, reembolso ni seguro.
@@ -487,9 +537,28 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
     if (password.length < 8) {
       return res.status(400).json({ error: 'password too short (min 8 chars)' });
     }
+    if (!isMailerConfigured()) {
+      return res.status(503).json({ error: 'email_delivery_unavailable' });
+    }
     const existing = await gridBotDb.getUserByEmail(email);
     if (existing) {
-      return res.status(409).json({ error: 'email already registered' });
+      if (existing.email_verified) {
+        return res.status(409).json({ error: 'email already registered' });
+      }
+      const passwordMatches = existing.password_hash
+        ? await verifyPassword(password, existing.password_hash)
+        : false;
+      if (!passwordMatches) {
+        return res.status(409).json({ error: 'email already registered' });
+      }
+      res.json(await issueEmailOtp({
+        userId: existing.id,
+        email: existing.email,
+        purpose: 'signup',
+        lang: tosLang,
+        req,
+      }));
+      return;
     }
     const password_hash = await hashPassword(password);
     // SECURITY (H-5): admin status is granted ONLY to the email that
@@ -510,6 +579,7 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
       email,
       password_hash,
       is_admin: isAdmin,
+      email_verified: false,
     });
     const ipAddress =
       (req.headers['x-forwarded-for'] as string | undefined)?.split(',')[0]?.trim() ||
@@ -527,16 +597,23 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
       terms_text_hash: createHash('sha256').update(tosText).digest('hex'),
     });
     log.info({ userId, email, isAdmin }, 'user signed up');
-    sendWelcomeEmail(email).catch((err) => {
-      log.warn({ err, userId }, 'welcome email failed');
-    });
-    res.json(await issueSession(gridBotDb, userId, isAdmin, false));
+    res.json(await issueEmailOtp({
+      userId,
+      email,
+      purpose: 'signup',
+      lang: tosLang,
+      req,
+    }));
     return;
   }));
 
   // POST /api/v2/auth/login — public.
   router.post('/auth/login', LOGIN_LIMITER, asyncHandler(async (req, res) => {
-    const body = (req.body ?? {}) as { email?: unknown; password?: unknown };
+    const body = (req.body ?? {}) as {
+      email?: unknown;
+      password?: unknown;
+      lang?: unknown;
+    };
     const email = String(body.email ?? '').trim().toLowerCase();
     const password = String(body.password ?? '');
     const user = await gridBotDb.getUserByEmail(email);
@@ -550,10 +627,102 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
     if (!ok) {
       return res.status(401).json({ error: 'invalid email or password' });
     }
+    if (!isMailerConfigured()) {
+      return res.status(503).json({ error: 'email_delivery_unavailable' });
+    }
+    const lang = body.lang === 'es' ? 'es' : 'en';
+    log.info({ userId: user.id, email }, 'login password accepted; OTP issued');
+    res.json(await issueEmailOtp({
+      userId: user.id,
+      email: user.email,
+      purpose: user.email_verified ? 'login' : 'signup',
+      lang,
+      req,
+    }));
+    return;
+  }));
+
+  router.post('/auth/verify-otp', OTP_VERIFY_LIMITER, asyncHandler(async (req, res) => {
+    const body = (req.body ?? {}) as { challengeId?: unknown; code?: unknown };
+    const challengeId = String(body.challengeId ?? '').trim();
+    const code = String(body.code ?? '').replace(/\s+/g, '');
+    if (!/^[a-f0-9]{48}$/.test(challengeId) || !/^\d{6}$/.test(code)) {
+      return res.status(400).json({ error: 'invalid_or_expired_code' });
+    }
+    const challenge = await gridBotDb.getEmailOtpChallenge(challengeId);
+    if (
+      !challenge ||
+      challenge.consumed_at ||
+      challenge.expires_at <= Date.now() ||
+      challenge.attempts >= OTP_MAX_ATTEMPTS
+    ) {
+      return res.status(400).json({ error: 'invalid_or_expired_code' });
+    }
+    const valid = await verifyPassword(code, challenge.code_hash);
+    if (!valid) {
+      await gridBotDb.incrementEmailOtpAttempts(challenge.id);
+      return res.status(400).json({
+        error: 'invalid_or_expired_code',
+        attemptsRemaining: Math.max(0, OTP_MAX_ATTEMPTS - challenge.attempts - 1),
+      });
+    }
+    const consumed = await gridBotDb.consumeEmailOtpChallenge(challenge.id);
+    if (!consumed) {
+      return res.status(400).json({ error: 'invalid_or_expired_code' });
+    }
+    const user = await gridBotDb.getUserById(challenge.user_id);
+    if (!user) {
+      return res.status(400).json({ error: 'invalid_or_expired_code' });
+    }
+    await gridBotDb.markUserEmailVerified(user.id);
     await gridBotDb.updateUserLastLogin(user.id);
     const hasGrvtCreds = await gridBotDb.hasGrvtCredentials(user.id);
-    log.info({ userId: user.id, email }, 'user logged in');
+    if (challenge.purpose === 'signup') {
+      sendWelcomeEmail(user.email).catch((err) => {
+        log.warn({ err, userId: user.id }, 'welcome email failed');
+      });
+    }
+    log.info({ userId: user.id, purpose: challenge.purpose }, 'email OTP verified');
     res.json(await issueSession(gridBotDb, user.id, !!user.is_admin, hasGrvtCreds));
+    return;
+  }));
+
+  router.post('/auth/resend-otp', OTP_SEND_LIMITER, asyncHandler(async (req, res) => {
+    const body = (req.body ?? {}) as { challengeId?: unknown; lang?: unknown };
+    const challengeId = String(body.challengeId ?? '').trim();
+    if (!/^[a-f0-9]{48}$/.test(challengeId)) {
+      return res.status(400).json({ error: 'invalid_or_expired_challenge' });
+    }
+    const challenge = await gridBotDb.getEmailOtpChallenge(challengeId);
+    if (!challenge || challenge.consumed_at) {
+      return res.status(400).json({ error: 'invalid_or_expired_challenge' });
+    }
+    const user = await gridBotDb.getUserById(challenge.user_id);
+    if (!user) {
+      return res.status(400).json({ error: 'invalid_or_expired_challenge' });
+    }
+    const code = String(randomInt(0, 1_000_000)).padStart(6, '0');
+    const codeHash = await hashPassword(code);
+    await gridBotDb.rotateEmailOtpChallenge(
+      challenge.id,
+      codeHash,
+      Date.now() + OTP_TTL_MS
+    );
+    const mailed = await sendAuthenticationCode({
+      to: user.email,
+      code,
+      purpose: challenge.purpose,
+      lang: body.lang === 'es' ? 'es' : 'en',
+      expiresInMinutes: OTP_TTL_MINUTES,
+    });
+    if (!mailed) {
+      return res.status(503).json({ error: 'email_delivery_unavailable' });
+    }
+    res.json({
+      ok: true,
+      emailHint: maskEmail(user.email),
+      expiresIn: OTP_TTL_MS / 1000,
+    });
     return;
   }));
 
@@ -1707,7 +1876,7 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
   //
   // Multi-bot: requires botId so each row can be attributed correctly.
   // Looks up the bot's pair from grid_bots and uses that as the GRVT
-  // instrument filter. Idempotent via INSERT OR IGNORE on event_time.
+  // instrument filter. Idempotent via ON CONFLICT on fill_id.
   //
   // Returns counts for the operator to verify how much new data was
   // recovered. Triggered manually via curl with X-Api-Key.
@@ -1760,9 +1929,10 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
         if (!eventTime) continue;
         totalFetched++;
         const result = await dbRun(db, `
-          INSERT OR IGNORE INTO fills_archive
+          INSERT INTO fills_archive
             (fill_id, event_time, is_buyer, price, size, fee, created_at, bot_id, instrument)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT (fill_id) DO NOTHING
         `, [
           eventTime,
           eventTime,
@@ -1817,8 +1987,7 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
 
   // ── GET /api/v2/bots/:id/orders ───────────────────────────────────
   // Local DB orders (the GRVT live open orders are surfaced via grid-state).
-  // The orders table can be SQLITE_CORRUPT on legacy databases — we wrap
-  // the query and degrade gracefully so the dashboard still loads.
+  // Query failures degrade gracefully so the dashboard still loads.
   router.get('/bots/:id/orders', asyncHandler(async (req, res) => {
     const id = parseInt(String(req.params.id ?? ''), 10);
     if (!Number.isFinite(id)) return res.status(400).json({ error: 'invalid bot id' });
@@ -1843,7 +2012,7 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
       res.json({ orders });
       return;
     } catch (err) {
-      // SQLITE_CORRUPT or schema mismatch on legacy DBs — return empty
+      // Missing/corrupt legacy schema — return empty
       // instead of 500 so the tab can render an empty state.
       log.warn({ err: (err as Error).message }, 'orders query failed');
       res.json({ orders: [], degraded: true, hint: (err as Error).message });
@@ -2656,10 +2825,10 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
       JOIN grid_bots b ON b.id = s.bot_id
       WHERE b.user_id = ?
         AND b.status != 'stopped'
-        AND s.date >= date('now', ?)
+        AND s.date >= TO_CHAR(CURRENT_DATE - (?::integer * INTERVAL '1 day'), 'YYYY-MM-DD')
       GROUP BY s.date
       ORDER BY s.date ASC
-    `, [userId, `-${days} days`]);
+    `, [userId, days]);
     res.json({ points: rows });
     return;
   }));

@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect } from 'react';
-import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
+import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Toaster, toast } from 'sonner';
 import { AuthProvider } from './lib/auth-context';
@@ -16,6 +16,7 @@ import { SignupPage } from './pages/signup';
 import { ForgotPasswordPage } from './pages/forgot-password';
 import { ResetPasswordPage } from './pages/reset-password';
 import { GrvtOnboardingPage } from './pages/onboarding/grvt';
+import { LandingPage } from './pages/landing';
 
 // Bot Detail owns the heaviest dependencies (lightweight-charts + recharts).
 // Lazy-load it so the Overview page doesn't pay the cost on first paint.
@@ -34,6 +35,27 @@ function RouteFallback() {
       Loading...
     </div>
   );
+}
+
+function RouteMeta() {
+  const { pathname } = useLocation();
+
+  useEffect(() => {
+    let robots = document.head.querySelector<HTMLMetaElement>('meta[name="robots"]');
+    if (pathname === '/') {
+      robots?.remove();
+      return;
+    }
+    if (!robots) {
+      robots = document.createElement('meta');
+      robots.name = 'robots';
+      document.head.appendChild(robots);
+    }
+    robots.content = 'noindex, nofollow';
+    document.title = 'Toro';
+  }, [pathname]);
+
+  return null;
 }
 
 // E.7: global error handler — surfaces network failures as a toast
@@ -88,14 +110,18 @@ export default function App() {
       <LangProvider>
         <AuthProvider>
           <BrowserRouter basename={import.meta.env.BASE_URL.replace(/\/$/, '')}>
+          <RouteMeta />
           <Routes>
+            {/* Public product page — the default route is intentionally indexable. */}
+            <Route path="/" element={<LandingPage />} />
+
             {/* Public auth routes — no AppShell, no ProtectedRoute */}
-            <Route path="login" element={<LoginPage />} />
-            <Route path="signup" element={<SignupPage />} />
-            <Route path="forgot-password" element={<ForgotPasswordPage />} />
-            <Route path="reset-password" element={<ResetPasswordPage />} />
+            <Route path="dashboard/login" element={<LoginPage />} />
+            <Route path="dashboard/signup" element={<SignupPage />} />
+            <Route path="dashboard/forgot-password" element={<ForgotPasswordPage />} />
+            <Route path="dashboard/reset-password" element={<ResetPasswordPage />} />
             <Route
-              path="onboarding/grvt"
+              path="dashboard/onboarding/grvt"
               element={
                 // Require login but NOT grvt creds (that's what this
                 // page sets up). No AppShell — standalone full-page form.
@@ -107,6 +133,7 @@ export default function App() {
 
             {/* Protected dashboard routes — wrapped in AppShell */}
             <Route
+              path="dashboard"
               element={
                 <ProtectedRoute>
                   <AppShell />
@@ -157,8 +184,14 @@ export default function App() {
                   </ErrorBoundary>
                 }
               />
-              <Route path="*" element={<Navigate to="/" replace />} />
+              <Route path="*" element={<Navigate to="/dashboard" replace />} />
             </Route>
+            {/* Compatibility for links from the standalone Vercel dashboard. */}
+            <Route path="login" element={<Navigate to="/dashboard/login" replace />} />
+            <Route path="signup" element={<Navigate to="/dashboard/signup" replace />} />
+            <Route path="forgot-password" element={<Navigate to="/dashboard/forgot-password" replace />} />
+            <Route path="reset-password" element={<Navigate to="/dashboard/reset-password" replace />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </BrowserRouter>
         <Toaster

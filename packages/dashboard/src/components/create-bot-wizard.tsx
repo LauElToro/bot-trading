@@ -169,7 +169,7 @@ export function CreateBotWizard({ open, onClose, preset }: CreateBotWizardProps)
     onSuccess: (result) => {
       toast.success(t('wizard.botCreatedToast', { id: result.id }));
       void queryClient.invalidateQueries({ queryKey: ['bots'] });
-      navigate(`/bots/${result.id}`);
+      navigate(`/dashboard/bots/${result.id}`);
       handleClose();
     },
     onError: (err: Error) => {

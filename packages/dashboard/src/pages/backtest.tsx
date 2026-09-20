@@ -125,7 +125,7 @@ export function BacktestPage() {
   }
 
   function applyToWizard() {
-    navigate('/', {
+    navigate('/dashboard', {
       state: {
         presetWizard: {
           pair: form.pair,

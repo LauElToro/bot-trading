@@ -222,10 +222,10 @@ export class GRVTClient {
       this.tradingAccountId = creds.subAccountId;
     } else {
       // Legacy fallback: read from env.
-      const isMockMode = process.env.MOCK_MODE === 'true' || process.env.DRY_RUN === 'true';
-      this.tradingAccountId = process.env.GRVT_TRADING_ACCOUNT_ID || (isMockMode ? 'mock-account' : '');
+      const isDryRun = process.env.DRY_RUN === 'true';
+      this.tradingAccountId = process.env.GRVT_TRADING_ACCOUNT_ID || (isDryRun ? 'dry-run-account' : '');
       if (!this.tradingAccountId) {
-        throw new Error('GRVT_TRADING_ACCOUNT_ID no encontrado en .env (set MOCK_MODE=true to bypass for development)');
+        throw new Error('GRVT_TRADING_ACCOUNT_ID no encontrado en .env');
       }
     }
   }

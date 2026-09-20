@@ -11,7 +11,7 @@ process.env.GRVT_TRADING_ACCOUNT_ID ||= '1';
 process.env.JWT_SECRET ||= 'test-jwt-secret-must-be-at-least-32-chars!!';
 process.env.JWT_ACCESS_SECRET ||= 'test-jwt-access-secret-at-least-32-chars!!';
 process.env.JWT_REFRESH_SECRET ||= 'test-jwt-refresh-secret-at-least-32-chars!';
-process.env.MOCK_MODE ||= 'true';
+process.env.CREDENTIAL_MASTER_KEY ||= Buffer.alloc(32, 1).toString('base64');
 
 import { vi, beforeAll, afterEach } from 'vitest';
 

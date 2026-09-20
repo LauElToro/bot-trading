@@ -24,7 +24,7 @@ Permisos de una API key GRVT ([docs](https://api-docs.grvt.io/builder_codes/)):
 | Dashboard | http://localhost:3848/dashboard/ |
 | Email | `admin@localhost` |
 | Password | `OWNER_INITIAL_PASSWORD` en `e:\GRVTBot\.env` |
-| Modo | `MOCK_MODE=true` + `DRY_RUN=true` (sin órdenes reales) |
+| Modo | `DRY_RUN=true` (sin órdenes reales) |
 
 Después del primer login: cambiá la contraseña y borrá `OWNER_INITIAL_PASSWORD` del `.env`.
 
@@ -74,7 +74,7 @@ Tampoco pongas una key del **master account** con withdraw.
 
 ## 4. Después de pegar las credenciales
 
-1. Dejá `DRY_RUN=true`, pasá `MOCK_MODE=false`, `docker compose up -d`.
+1. Dejá `DRY_RUN=true` y ejecutá `docker compose up -d`.
 2. El wizard de grid lo completás **vos** (par, rango, N, inversión, leverage, SL/TP). Yo no elijo esos números.
 3. Recién cuando el backtest del dashboard te cierre: `DRY_RUN=false` y start desde la UI.
 

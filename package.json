@@ -3,14 +3,6 @@
   "version": "0.1.0",
   "private": true,
   "description": "Toro — grid trading bot for GRVT perpetual futures, by LauElToro.",
-  "homepage": "https://github.com/LauElToro/bot-trading",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/LauElToro/bot-trading.git"
-  },
-  "bugs": {
-    "url": "https://github.com/LauElToro/bot-trading/issues"
-  },
   "workspaces": [
     "packages/*"
   ],

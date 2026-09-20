@@ -75,7 +75,7 @@ export function ForgotPasswordPage() {
         )}
 
         <p className="text-xs text-text-muted text-center">
-          <Link to="/login" className="text-primary hover:underline">
+          <Link to="/dashboard/login" className="text-primary hover:underline">
             {t('auth.forgotPassword.backToLogin')}
           </Link>
         </p>

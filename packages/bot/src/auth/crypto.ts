@@ -1,14 +1,12 @@
 // AES-256-GCM helpers for encrypting per-user GRVT credentials.
 //
-// The master key lives on disk at MASTER_KEY_PATH (default
-// /etc/grvt-grid/master.key). It MUST be exactly 32 bytes (256 bits)
-// and have file permissions 0600 owned by the process user. Losing
-// this file means every user's GRVT credentials become unrecoverable
-// — back it up offline (encrypted USB / password manager).
+// CREDENTIAL_MASTER_KEY contains exactly 32 random bytes encoded as base64.
+// Losing it makes every user's GRVT credentials unrecoverable. Keep it in
+// the deployment secret manager and an offline password manager.
 //
 // Each encrypt() call generates a fresh random 12-byte IV. Output
 // fields (ciphertext, iv, authTag) are base64-encoded so they can be
-// stored as TEXT in SQLite. decrypt() validates the GCM auth tag,
+// stored as TEXT in PostgreSQL. decrypt() validates the GCM auth tag,
 // so any tampering with the stored ciphertext throws on decrypt
 // instead of returning garbled plaintext.
 
@@ -18,7 +16,6 @@ import {
   randomBytes,
   type CipherGCMTypes,
 } from 'node:crypto';
-import { readFileSync, existsSync } from 'node:fs';
 
 const ALGO: CipherGCMTypes = 'aes-256-gcm';
 const KEY_LEN = 32;
@@ -29,19 +26,18 @@ let cachedKey: Buffer | null = null;
 function getMasterKey(): Buffer {
   if (cachedKey) return cachedKey;
 
-  const path = process.env.MASTER_KEY_PATH || '/etc/grvt-grid/master.key';
-  if (!existsSync(path)) {
+  const encoded = process.env.CREDENTIAL_MASTER_KEY?.trim();
+  if (!encoded) {
     throw new Error(
-      `Master key file not found at ${path}. Generate one with:\n` +
-        `  mkdir -p $(dirname ${path}) && head -c 32 /dev/urandom > ${path} && chmod 600 ${path}\n` +
-        `Then chown it to the process user. Without this file, no GRVT credential can be encrypted or decrypted.`
+      'CREDENTIAL_MASTER_KEY is required. Generate one with: ' +
+      'openssl rand -base64 32'
     );
   }
 
-  const buf = readFileSync(path);
+  const buf = Buffer.from(encoded, 'base64');
   if (buf.length !== KEY_LEN) {
     throw new Error(
-      `Master key at ${path} must be exactly ${KEY_LEN} bytes, got ${buf.length}.`
+      `CREDENTIAL_MASTER_KEY must decode to exactly ${KEY_LEN} bytes, got ${buf.length}.`
     );
   }
   cachedKey = buf;

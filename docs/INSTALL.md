@@ -13,44 +13,24 @@ Si no tenés cuenta GRVT, registrate acá: [https://grvt.io/?ref=5LBBEMJ](https:
 | **A GRVT account** | Create one with this referral: [grvt.io/?ref=5LBBEMJ](https://grvt.io/?ref=5LBBEMJ) |
 | **A Linux server** (or Mac, or Windows with WSL2) with Docker Engine ≥ 24 and Docker Compose v2 | The whole stack is containerized. No host Node install needed. |
 | **2 GB RAM** minimum, 1 vCPU is enough | The bot is ~110 MB, dashboard is static, notifier is tiny. |
+| **External PostgreSQL 14+** with TLS | Required for bot state. Set its connection URL in `DATABASE_URL`. |
 | **A GRVT API key + secret + sub-account id** | Generate from grvt.io → Account → API Keys |
-| **(Optional) A domain name pointed at your server** | Required only if you want HTTPS via Caddy. Without a domain, you can still access the dashboard locally or over a VPN. |
 | **(Optional) A Telegram bot token + chat id** | For notifications. Skip with empty values if you don't want them. |
 
-## Quick install (5 minutes)
+Existing SQLite installations must complete
+[the PostgreSQL migration runbook](MIGRATION-POSTGRES.md) before starting
+this version.
+
+## Install
 
 ```bash
-# 1. Clone
-git clone https://github.com/LauElToro/bot-trading.git
-cd bot-trading
-
-# 2. Run the interactive installer
-./scripts/install.sh
-```
-
-The installer will:
-1. Check Docker is installed and running
-2. Generate a fresh `DASHBOARD_API_KEY`
-3. Prompt you for GRVT credentials (and Telegram if you want notifications)
-4. Build the Docker images
-5. Start the stack
-6. Wait for the bot's health check to pass
-7. Print the dashboard URL
-
-When it's done, open the printed URL and sign in with `OWNER_EMAIL` /
-`OWNER_INITIAL_PASSWORD` (or create an account if signup is enabled).
-Then connect your GRVT credentials from the onboarding screen.
-
-## Manual install (if you want to skip the installer)
-
-```bash
-git clone https://github.com/LauElToro/bot-trading.git
+git clone <URL_PRIVADA_DEL_REPOSITORIO>
 cd bot-trading
 
 # 1. Create .env from the template and fill in your credentials
 cp .env.example .env
 chmod 600 .env
-# Edit .env with your GRVT API keys, etc.
+# Edit .env with DATABASE_URL, your GRVT API keys, etc.
 
 # 2. Build and start
 docker compose build
@@ -65,30 +45,17 @@ open http://localhost:3848/dashboard/
 
 ## Deployment profiles
 
-`docker-compose.yml` defines three optional services controlled by Compose
-profiles:
+`docker-compose.yml` defines the notifier as an optional service:
 
 | Profile | Includes | When to use |
 |---|---|---|
 | _(default)_ | bot only | Local dev, behind a VPN, or you'll proxy from another reverse proxy |
 | `with-notifier` | bot + notifier | You want Telegram alerts |
-| `with-tls` | bot + caddy | You have a public domain and want HTTPS |
-| `full` | bot + notifier + caddy | Production self-host with everything |
-
-To start with a profile:
+To start it:
 
 ```bash
-docker compose --profile full up -d
+docker compose --profile with-notifier up -d
 ```
-
-## TLS setup (with-tls profile)
-
-1. Point an A record from your domain to your server's public IP.
-2. Edit `Caddyfile`: replace `your-domain.example.com` with your domain.
-3. Open ports 80 and 443 on your server's firewall.
-4. `docker compose --profile with-tls up -d`
-5. Caddy will automatically obtain a Let's Encrypt cert in ~30 seconds.
-6. Open `https://your-domain/dashboard/`.
 
 ## Stopping safely
 
@@ -118,15 +85,14 @@ docker kill grvt-grid-bot
 
 ## Backups
 
-The bot's SQLite database lives at `./data/grid_bot.db` on the host. WAL
-files (`*.db-wal`, `*.db-shm`) live next to it. Back the whole `data/`
-directory up nightly to somewhere off-host:
+Run `pg_dump` from a trusted host:
 
 ```bash
-# Example: cron job that pushes a daily snapshot to S3 / Backblaze / etc.
-0 3 * * * cd /opt/grvt-grid && tar czf - data | rclone rcat \
-    remote:grvt-grid-backups/$(date +\%F).tar.gz
+pg_dump --format=custom --file=grvt-$(date +%F).dump "$DATABASE_URL"
 ```
+
+Use provider snapshots as a second backup layer and periodically test
+`pg_restore` into a separate database.
 
 ## Updating
 
@@ -137,7 +103,7 @@ docker compose build
 docker compose up -d   # rolling restart, preserves data dir
 ```
 
-The bot's SQLite migrations run automatically on boot.
+PostgreSQL migrations run automatically on boot.
 
 ## Troubleshooting
 
@@ -155,6 +121,8 @@ Common causes:
 - **GRVT account not funded**: the bot won't start trading on a zero balance,
   but health check should still pass. If not, check your sub-account id.
 - **Port 3848 already in use**: change `BOT_PORT` in `.env`.
+- **Database unavailable**: confirm `DATABASE_URL`, TLS mode and provider
+  firewall rules. `/api/health` returns 503 while PostgreSQL is unavailable.
 
 ### Dashboard says "GRVT session expired"
 
@@ -176,12 +144,11 @@ docker compose start notifier
 
 Before you point a domain at this and walk away:
 
-- [ ] `.env` permissions are `600` (the installer sets this; verify with `ls -la .env`)
-- [ ] `DASHBOARD_API_KEY` is at least 32 chars (the installer generates 64)
-- [ ] You're using the `with-tls` profile (or fronted with another HTTPS proxy)
-- [ ] Your server's firewall blocks port 3848 from the public internet (Caddy
-      proxies via the docker network — only 80/443 should be public)
-- [ ] You've set up nightly backups of `./data/`
+- [ ] `.env` permissions are `600` (verify with `ls -la .env`)
+- [ ] `DASHBOARD_API_KEY` is at least 32 chars
+- [ ] Public deployments use an external HTTPS reverse proxy or VPN
+- [ ] Your server's firewall blocks port 3848 from the public internet
+- [ ] You've set up nightly `pg_dump` backups and provider snapshots
 - [ ] Signup is disabled on private deploys (`SIGNUP_DISABLED=1`) unless
       you intend to host multiple tenants
 - [ ] Your GRVT API key is scoped to the trading sub-account only — not the
@@ -191,10 +158,6 @@ Before you point a domain at this and walk away:
 
 ```
 /opt/grvt-grid/
-├── data/                         ← SQLite db (bind mount)
-│   ├── grid_bot.db
-│   ├── grid_bot.db-wal
-│   └── grid_bot.db-shm
 ├── logs/
 │   ├── bot/                      ← bot stdout
 │   └── notifier/                 ← notifier stdout

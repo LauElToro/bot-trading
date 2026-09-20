@@ -1,13 +1,13 @@
 # Toro
 
-Bot grid de [LauElToro](https://github.com/LauElToro) para futuros perpetuos de [GRVT](https://grvt.io/?ref=5LBBEMJ). Autohospedable, con dashboard en tiempo real, alertas por Telegram y credenciales API cifradas por usuario.
+Bot grid privado de LauElToro para futuros perpetuos de [GRVT](https://grvt.io/?ref=5LBBEMJ), con dashboard en tiempo real, alertas por Telegram y credenciales API cifradas por usuario.
 
 Si todavía no tenés cuenta en GRVT, creala con mi referido: **[grvt.io/?ref=5LBBEMJ](https://grvt.io/?ref=5LBBEMJ)**
 
 ## Uso
 
 ```bash
-git clone https://github.com/LauElToro/bot-trading.git
+git clone <URL_PRIVADA_DEL_REPOSITORIO>
 cd bot-trading
 npm install
 npm run build
@@ -32,8 +32,11 @@ packages/
   notifier/   Alertas Telegram
 ```
 
-Datos en SQLite (`data/grid_bot.db`). Passwords con bcrypt; credenciales GRVT cifradas con AES-256-GCM. Ver [SECURITY.md](SECURITY.md).
+Datos en PostgreSQL externo mediante `DATABASE_URL`. Passwords con bcrypt;
+credenciales GRVT cifradas con AES-256-GCM. Para instalaciones anteriores,
+ver [migración desde SQLite](docs/MIGRATION-POSTGRES.md) y
+[SECURITY.md](SECURITY.md).
 
 ## Seguridad
 
-No abras issues públicos para vulnerabilidades. Escribí a la pestaña Security del repo: [LauElToro/bot-trading](https://github.com/LauElToro/bot-trading).
+No publiques vulnerabilidades. Contactá directamente al operador de Toro.

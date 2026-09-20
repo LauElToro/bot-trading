@@ -1,17 +1,24 @@
-// Read-only handle to the bot's SQLite database.
-//
-// Uses the `sqlite3` package (callback-based, but with prebuilt binaries on
-// every common platform — better-sqlite3's node-gyp build chain is too
-// fragile across the dev/CI/VPS matrix). All methods are wrapped in
-// Promises so the worker loop reads naturally.
-//
-// We open with OPEN_READONLY so we physically cannot mutate the file the
-// bot writes to.
+// Read-only query surface over the bot's PostgreSQL database.
 
-import sqlite3 from 'sqlite3';
+import pg, { type QueryResultRow } from 'pg';
 import { childLogger } from './logger.js';
 
+const { Pool, types } = pg;
 const log = childLogger('db');
+
+// Preserve the value shapes previously returned by SQLite.
+types.setTypeParser(20, Number); // int8
+types.setTypeParser(1700, Number); // numeric
+types.setTypeParser(1114, (value) => value); // timestamp
+types.setTypeParser(1184, (value) => value); // timestamptz
+
+export interface DbPool {
+  query<T extends QueryResultRow>(
+    sql: string,
+    params?: unknown[],
+  ): Promise<{ rows: T[] }>;
+  end(): Promise<void>;
+}
 
 export interface BotRow {
   id: number;
@@ -58,29 +65,32 @@ export interface DailySnapshotRow {
 }
 
 export class NotifierDb {
-  private db: sqlite3.Database;
+  private readonly pool: DbPool;
 
-  constructor(filePath: string) {
-    log.info({ filePath }, 'opening database (readonly)');
-    this.db = new sqlite3.Database(filePath, sqlite3.OPEN_READONLY);
+  constructor(databaseUrl: string, pool?: DbPool) {
+    if (!databaseUrl && !pool) {
+      throw new Error('NOTIFIER_DATABASE_URL or DATABASE_URL is required');
+    }
+    log.info('opening PostgreSQL pool');
+    this.pool = pool ?? new Pool({ connectionString: databaseUrl });
   }
 
-  private all<T>(sql: string, params: unknown[] = []): Promise<T[]> {
-    return new Promise((resolve, reject) => {
-      this.db.all(sql, params, (err, rows) => {
-        if (err) reject(err);
-        else resolve((rows as T[]) ?? []);
-      });
-    });
+  private async all<T extends QueryResultRow>(
+    sql: string,
+    params: unknown[] = [],
+  ): Promise<T[]> {
+    return (await this.pool.query<T>(sql, params)).rows;
   }
 
-  private get<T>(sql: string, params: unknown[] = []): Promise<T | undefined> {
-    return new Promise((resolve, reject) => {
-      this.db.get(sql, params, (err, row) => {
-        if (err) reject(err);
-        else resolve(row as T | undefined);
-      });
-    });
+  private async get<T extends QueryResultRow>(
+    sql: string,
+    params: unknown[] = [],
+  ): Promise<T | undefined> {
+    return (await this.pool.query<T>(sql, params)).rows[0];
+  }
+
+  async ping(): Promise<void> {
+    await this.pool.query('SELECT 1', []);
   }
 
   /**
@@ -105,7 +115,7 @@ export class NotifierDb {
   async getLastFillPrice(botId: number): Promise<number | null> {
     const row = await this.get<{ price: number }>(
       `SELECT price FROM fills_archive
-       WHERE bot_id = ?
+       WHERE bot_id = $1
        ORDER BY event_time DESC
        LIMIT 1`,
       [botId]
@@ -124,9 +134,9 @@ export class NotifierDb {
               pr.size, pr.profit, pr.created_at
        FROM paired_roundtrips pr
        LEFT JOIN grid_bots b ON b.id = pr.bot_id
-       WHERE pr.id > ?
+       WHERE pr.id > $1
        ORDER BY pr.id ASC
-       LIMIT ?`,
+       LIMIT $2`,
       [sinceId, limit]
     );
   }
@@ -139,7 +149,7 @@ export class NotifierDb {
       `SELECT id, bot_id, date, equity, grid_profit_net, trend_pnl,
               total_pnl, round_trips
        FROM daily_snapshots
-       WHERE bot_id = ?
+       WHERE bot_id = $1
        ORDER BY date DESC
        LIMIT 1`,
       [botId]
@@ -160,18 +170,13 @@ export class NotifierDb {
 
   async getUserEmail(userId: string): Promise<string | null> {
     const row = await this.get<{ email: string }>(
-      `SELECT email FROM users WHERE id = ?`,
+      `SELECT email FROM users WHERE id = $1`,
       [userId]
     );
     return row?.email ?? null;
   }
 
   close(): Promise<void> {
-    return new Promise((resolve, reject) => {
-      this.db.close((err) => {
-        if (err) reject(err);
-        else resolve();
-      });
-    });
+    return this.pool.end();
   }
 }

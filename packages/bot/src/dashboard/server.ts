@@ -11,7 +11,7 @@ import { createServer } from 'node:http';
 import { grvtClient } from '../api/client.js';
 import { db } from '../database/db.js';
 import { gridEngine } from '../bot/grid-engine.js';
-import { mountV2 } from '../server/v2-bootstrap.js';
+import { mountV2, type V2Handles } from '../server/v2-bootstrap.js';
 
 dotenv.config();
 
@@ -143,15 +143,21 @@ app.use((req, res, next) => {
 });
 app.use(express.json());
 
-app.get('/api/health', (_req, res) => {
-  res.json({
-    status: 'ok',
-    uptime: Math.round(process.uptime()),
-  });
-});
-
-app.get('/', (_req, res) => {
-  res.redirect('/dashboard/');
+app.get('/api/health', async (_req, res) => {
+  try {
+    await db.getExecutor().get('SELECT 1');
+    res.json({
+      status: 'ok',
+      database: 'ok',
+      uptime: Math.round(process.uptime()),
+    });
+  } catch {
+    res.status(503).json({
+      status: 'down',
+      database: 'unavailable',
+      uptime: Math.round(process.uptime()),
+    });
+  }
 });
 
 const dashV2Candidates = [
@@ -162,29 +168,8 @@ const dashV2Candidates = [
 const dashV2Path = dashV2Candidates.find((p) => {
   try { return fs.existsSync(path.join(p, 'index.html')); } catch { return false; }
 });
-if (dashV2Path) {
-  app.use('/dashboard', express.static(dashV2Path, {
-    setHeaders: (res, filePath) => {
-      if (filePath.includes(`${path.sep}assets${path.sep}`)) {
-        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
-      } else {
-        res.setHeader('Cache-Control', 'no-cache, must-revalidate');
-      }
-    },
-  }));
-  app.get(/^\/dashboard(\/.*)?$/, (req, res, next) => {
-    if (path.extname(req.path)) return next();
-    res.setHeader('Cache-Control', 'no-cache, must-revalidate');
-    res.sendFile(path.join(dashV2Path, 'index.html'), (err) => {
-      if (err) next(err);
-    });
-  });
-  console.log(`Serving dashboard from: ${dashV2Path}`);
-} else {
-  console.log('Dashboard not deployed (no dashboard-dist found)');
-}
-
 let v2RouterRef: express.Router | null = null;
+let v2Handles: V2Handles | null = null;
 export function setV2Router(router: express.Router): void {
   v2RouterRef = router;
 }
@@ -195,6 +180,28 @@ app.use('/api/v2', (req: express.Request, res: express.Response, next: express.N
     res.status(503).json({ error: 'v2 surface not configured', hint: 'set DASHBOARD_API_KEY' });
   }
 });
+
+if (dashV2Path) {
+  app.use(express.static(dashV2Path, {
+    setHeaders: (res, filePath) => {
+      if (filePath.includes(`${path.sep}assets${path.sep}`)) {
+        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+      } else {
+        res.setHeader('Cache-Control', 'no-cache, must-revalidate');
+      }
+    },
+  }));
+  app.get(/^\/(?!api(?:\/|$)|ws(?:\/|$)).*/, (req, res, next) => {
+    if (path.extname(req.path)) return next();
+    res.setHeader('Cache-Control', 'no-cache, must-revalidate');
+    res.sendFile(path.join(dashV2Path, 'index.html'), (err) => {
+      if (err) next(err);
+    });
+  });
+  console.log(`Serving public landing and dashboard from: ${dashV2Path}`);
+} else {
+  console.log('Dashboard not deployed (no dashboard-dist found)');
+}
 
 app.use((_req, res) => {
   res.status(404).json({ error: 'Endpoint not found' });
@@ -207,6 +214,7 @@ app.use((error: unknown, _req: express.Request, res: express.Response, _next: ex
 
 process.on('SIGINT', async () => {
   try {
+    await v2Handles?.shutdown();
     await gridEngine.stop();
     await db.close();
     process.exit(0);
@@ -217,6 +225,7 @@ process.on('SIGINT', async () => {
 });
 
 process.on('SIGTERM', async () => {
+  await v2Handles?.shutdown();
   try {
     await gridEngine.stop({ preserveOrders: true });
   } catch (stopErr) {
@@ -233,10 +242,10 @@ async function startServer() {
     const httpServer = createServer(app);
     const apiKey = process.env.DASHBOARD_API_KEY;
     if (apiKey && apiKey.length >= 16) {
-      mountV2({
+      v2Handles = mountV2({
         setRouter: setV2Router,
         httpServer,
-        db: db.getRawDb(),
+        db: db.getExecutor(),
         gridBotDb: db,
         grvtClient,
         engine: gridEngine,

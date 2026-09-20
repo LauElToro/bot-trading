@@ -358,9 +358,9 @@ export class GridEngine extends EventEmitter {
   private isRunning = false;
 
   // C.5: track every async task spawned from an interval / setTimeout
-  // so stop() can drain them before the host closes the SQLite DB.
+  // so stop() can drain them before the host closes PostgreSQL.
   // Without this, a SIGTERM during pollFillArchive would fail mid-write
-  // against a closing DB, potentially corrupting the WAL.
+  // against a closing pool.
   private inflightTasks = new Set<Promise<unknown>>();
 
   // Per-bot mutex set: a bot id is in this set while a long-running
@@ -587,7 +587,7 @@ export class GridEngine extends EventEmitter {
    * C.5: the previous implementation cleared intervals and returned
    * immediately, leaving in-flight poll tasks (fill archive, funding,
    * compound check) racing against the host's db.close(). On SIGTERM
-   * under real load this corrupted the SQLite WAL. Now we:
+   * under real load this lost the final database writes. Now we:
    *
    *   1. Flip isRunning=false so NEW work is refused by track().
    *   2. Clear every interval so no new ticks fire.

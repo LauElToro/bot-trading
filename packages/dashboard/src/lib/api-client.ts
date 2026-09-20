@@ -81,6 +81,13 @@ interface AuthSession {
   hasGrvtCreds: boolean;
 }
 
+export interface OtpChallenge {
+  requiresOtp: true;
+  challengeId: string;
+  emailHint: string;
+  expiresIn: number;
+}
+
 async function persistSession(session: AuthSession): Promise<AuthSession> {
   const access = session.accessToken || session.token;
   if (session.refreshToken) {
@@ -374,12 +381,20 @@ export const api = {
   // ── Auth endpoints ──────────────────────────────────────────────
 
   signup: (email: string, password: string, tosLang: 'es' | 'en' = 'en') =>
-    publicRequest<AuthSession>('/auth/signup', { email, password, terms_lang: tosLang })
+    publicRequest<OtpChallenge>('/auth/signup', { email, password, terms_lang: tosLang }),
+
+  login: (email: string, password: string, lang: 'es' | 'en' = 'en') =>
+    publicRequest<OtpChallenge>('/auth/login', { email, password, lang }),
+
+  verifyOtp: (challengeId: string, code: string) =>
+    publicRequest<AuthSession>('/auth/verify-otp', { challengeId, code })
       .then(persistSession),
 
-  login: (email: string, password: string) =>
-    publicRequest<AuthSession>('/auth/login', { email, password })
-      .then(persistSession),
+  resendOtp: (challengeId: string, lang: 'es' | 'en' = 'en') =>
+    publicRequest<{ ok: true; emailHint: string; expiresIn: number }>(
+      '/auth/resend-otp',
+      { challengeId, lang }
+    ),
 
   loginWithGoogle: (idToken: string, extras: {
     acceptedTerms?: boolean;

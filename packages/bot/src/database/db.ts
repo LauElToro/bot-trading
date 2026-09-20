@@ -1,15 +1,5 @@
-// Database SQLite - Fase 3
-// WAL mode + tablas: bots, grid_levels, orders, trades, funding_history
-// Según specs de grvt-grid-bot-specs.md
-
-import sqlite3 from 'sqlite3';
-import { promisify } from 'util';
-import path from 'path';
-import fs from 'fs';
 import { isUserId, newUserId, type UserId } from '../auth/user-id.js';
-
-// Configurar SQLite para verbose logging en desarrollo
-const Database = process.env.NODE_ENV === 'production' ? sqlite3.Database : sqlite3.verbose().Database;
+import { PostgresExecutor, type RunResult } from './postgres.js';
 
 export interface GridBot {
   id: number;
@@ -150,67 +140,27 @@ export interface DailySnapshot {
   created_at: string;
 }
 
-/**
- * Database Manager con SQLite + WAL mode
- */
+/** PostgreSQL-backed database manager. */
 export class GridBotDB {
-  private db: sqlite3.Database;
-  private dbPath: string;
-
-  // Métodos promisificados
-  private dbRun: (sql: string, ...params: any[]) => Promise<sqlite3.RunResult>;
+  private db: PostgresExecutor;
+  private dbRun: (sql: string, ...params: any[]) => Promise<RunResult>;
   private dbGet: (sql: string, ...params: any[]) => Promise<any>;
   private dbAll: (sql: string, ...params: any[]) => Promise<any[]>;
 
-  constructor(dbPath?: string) {
-    // Usar directorio de datos del proyecto
-    const dataDir = path.join(process.cwd(), 'data');
-    if (!fs.existsSync(dataDir)) {
-      fs.mkdirSync(dataDir, { recursive: true });
-    }
-
-    this.dbPath = dbPath || path.join(dataDir, 'grid_bot.db');
-    
-    // Abrir database
-    this.db = new Database(this.dbPath, (err) => {
-      if (err) {
-        console.error('❌ Error abriendo SQLite database:', err);
-        throw err;
-      }
-      console.log(`📊 SQLite database: ${this.dbPath}`);
-    });
-
-    // Promisificar métodos — sqlite3 db.run necesita wrapper especial para lastID
-    this.dbRun = (sql: string, ...params: any[]): Promise<sqlite3.RunResult> => {
-      return new Promise((resolve, reject) => {
-        this.db.run(sql, ...params, function(this: sqlite3.RunResult, err: Error | null) {
-          if (err) reject(err);
-          else resolve({ lastID: this.lastID, changes: this.changes } as sqlite3.RunResult);
-        });
-      });
-    };
-    this.dbGet = promisify(this.db.get.bind(this.db));
-    this.dbAll = promisify(this.db.all.bind(this.db));
+  constructor(databaseUrl?: string) {
+    this.db = new PostgresExecutor(databaseUrl ?? process.env.DATABASE_URL);
+    const args = (params: any[]): unknown[] =>
+      params.length === 1 && Array.isArray(params[0]) ? params[0] : params;
+    this.dbRun = (sql, ...params) => this.db.run(sql, args(params));
+    this.dbGet = (sql, ...params) => this.db.get(sql, args(params));
+    this.dbAll = (sql, ...params) => this.db.all(sql, args(params));
   }
 
-  /**
-   * Inicializar database: WAL mode + crear tablas
-   */
+  /** Validate the external connection and apply pending migrations. */
   async initialize(): Promise<void> {
     try {
-      // Configurar WAL mode (Write-Ahead Logging)
-      await this.dbRun('PRAGMA journal_mode = WAL');
-      await this.dbRun('PRAGMA synchronous = NORMAL');
-      await this.dbRun('PRAGMA cache_size = 1000');
-      await this.dbRun('PRAGMA temp_store = MEMORY');
-      
-      console.log('⚡ SQLite en WAL mode');
-
-      // Crear tablas
-      await this.createTables();
-      
-      console.log('✅ Database inicializada');
-      
+      await this.db.migrate();
+      console.log('✅ PostgreSQL database inicializada');
     } catch (error) {
       console.error('❌ Error inicializando database:', error);
       throw error;
@@ -659,7 +609,7 @@ export class GridBotDB {
     // grvt_credentials — AES-256-GCM encrypted GRVT API + signing
     // material. One row per user. Each field has its own IV+tag
     // because GCM requires unique IV per ciphertext under same key.
-    // Master key lives at MASTER_KEY_PATH on disk; losing it means
+    // Master key comes from CREDENTIAL_MASTER_KEY; losing it means
     // every user must re-paste their credentials.
     await this.dbRun(`
       CREATE TABLE IF NOT EXISTS grvt_credentials (
@@ -756,6 +706,23 @@ export class GridBotDB {
     `);
     await this.dbRun(`CREATE INDEX IF NOT EXISTS idx_pwreset_token_hash ON password_reset_tokens(token_hash)`);
     await this.dbRun(`CREATE INDEX IF NOT EXISTS idx_pwreset_user ON password_reset_tokens(user_id)`);
+
+    await this.dbRun(`
+      CREATE TABLE IF NOT EXISTS email_otp_challenges (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        purpose TEXT NOT NULL CHECK (purpose IN ('signup', 'login')),
+        code_hash TEXT NOT NULL,
+        expires_at INTEGER NOT NULL,
+        consumed_at INTEGER,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL,
+        ip_address TEXT
+      )
+    `);
+    await this.dbRun(
+      `CREATE INDEX IF NOT EXISTS idx_email_otp_user ON email_otp_challenges(user_id, purpose)`
+    );
 
     // ALTER existing tables to add user_id. Wrapped in try/catch
     // because SQLite doesn't support `ADD COLUMN IF NOT EXISTS`.
@@ -963,18 +930,15 @@ export class GridBotDB {
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `;
 
-    await this.dbRun(sql, values);
-    const row = await this.dbGet('SELECT last_insert_rowid() as id');
-    const botId = row.id as number;
-
-    // Seed the cash-movements ledger with the initial deposit so the
-    // history is complete from day 1.
-    await this.dbRun(`
-      INSERT INTO bot_cash_movements (bot_id, type, amount_usdt, notes)
-      VALUES (?, 'initial', ?, 'Initial investment at bot creation')
-    `, [botId, params.investment_usdt]);
-
-    return botId;
+    return this.db.transaction(async (tx) => {
+      const row = await tx.get<{ id: number }>(`${sql} RETURNING id`, values);
+      if (!row) throw new Error('Failed to create grid bot');
+      await tx.run(`
+        INSERT INTO bot_cash_movements (bot_id, type, amount_usdt, notes)
+        VALUES (?, 'initial', ?, 'Initial investment at bot creation')
+      `, [row.id, params.investment_usdt]);
+      return row.id;
+    });
   }
 
   /**
@@ -1000,6 +964,7 @@ export class GridBotDB {
     const result = await this.dbRun(`
       INSERT INTO bot_cash_movements (bot_id, type, amount_usdt, notes)
       VALUES (?, ?, ?, ?)
+      RETURNING id
     `, [params.bot_id, params.type, params.amount_usdt, params.notes ?? null]);
     return result.lastID ?? 0;
   }
@@ -1088,11 +1053,11 @@ export class GridBotDB {
     const state = params.state ?? 'active';
     const values = [params.bot_id, params.level_index, params.price, params.side,
         params.quantity, params.is_filled ? 1 : 0, params.order_id || null, params.filled_at || null, state];
-    const sql = `INSERT INTO grid_levels (bot_id, level_index, price, side, quantity, is_filled, order_id, filled_at, state)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`;
-
-    await this.dbRun(sql, values);
-    const row = await this.dbGet('SELECT last_insert_rowid() as id');
+    const row = await this.dbGet(`INSERT INTO grid_levels
+      (bot_id, level_index, price, side, quantity, is_filled, order_id, filled_at, state)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      RETURNING id`, values);
+    if (!row) throw new Error('Failed to create grid level');
     return row.id;
   }
 
@@ -1239,48 +1204,15 @@ export class GridBotDB {
       state?: 'active' | 'virtual' | 'filled';
     }>
   ): Promise<void> {
-    return new Promise((resolve, reject) => {
-      this.db.serialize(() => {
-        this.db.run('BEGIN TRANSACTION');
-        this.db.run('DELETE FROM grid_levels WHERE bot_id = ?', [botId], (delErr) => {
-          if (delErr) {
-            this.db.run('ROLLBACK');
-            return reject(delErr);
-          }
-          let pending = newLevels.length;
-          if (pending === 0) {
-            this.db.run('COMMIT', (commitErr) => {
-              if (commitErr) reject(commitErr);
-              else resolve();
-            });
-            return;
-          }
-          let failed = false;
-          for (const level of newLevels) {
-            const st = level.state ?? 'active';
-            this.db.run(
-              `INSERT INTO grid_levels (bot_id, level_index, price, side, quantity, is_filled, order_id, state)
-               VALUES (?, ?, ?, ?, ?, 0, '0x00', ?)`,
-              [botId, level.level_index, level.price, level.side, level.quantity, st],
-              (insErr) => {
-                if (failed) return;
-                if (insErr) {
-                  failed = true;
-                  this.db.run('ROLLBACK');
-                  return reject(insErr);
-                }
-                pending--;
-                if (pending === 0 && !failed) {
-                  this.db.run('COMMIT', (commitErr) => {
-                    if (commitErr) reject(commitErr);
-                    else resolve();
-                  });
-                }
-              }
-            );
-          }
-        });
-      });
+    await this.db.transaction(async (tx) => {
+      await tx.run('DELETE FROM grid_levels WHERE bot_id = ?', [botId]);
+      for (const level of newLevels) {
+        await tx.run(
+          `INSERT INTO grid_levels (bot_id, level_index, price, side, quantity, is_filled, order_id, state)
+           VALUES (?, ?, ?, ?, ?, 0, '0x00', ?)`,
+          [botId, level.level_index, level.price, level.side, level.quantity, level.state ?? 'active'],
+        );
+      }
     });
   }
 
@@ -1294,18 +1226,20 @@ export class GridBotDB {
       const result = await this.dbRun(`
         INSERT INTO orders (bot_id, order_id, instrument, side, type, quantity, price, status, grid_level_id, metadata)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        RETURNING id
       `, [params.bot_id, params.order_id, params.instrument, params.side, params.type,
           params.quantity, params.price, params.status, params.grid_level_id, params.metadata]);
 
       return result.lastID!;
     } catch (err: any) {
-      if (err.message?.includes('UNIQUE constraint') && 
+      if ((err.code === '23505' || err.message?.includes('unique constraint')) &&
           (params.order_id === '0x00' || params.order_id.startsWith('0x000000'))) {
         params.order_id = `temp_${Date.now()}_${params.price}`;
         console.log(`[DB] UNIQUE constraint workaround: renamed to ${params.order_id}`);
         const result = await this.dbRun(`
           INSERT INTO orders (bot_id, order_id, instrument, side, type, quantity, price, status, grid_level_id, metadata)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          RETURNING id
         `, [params.bot_id, params.order_id, params.instrument, params.side, params.type,
             params.quantity, params.price, params.status, params.grid_level_id, params.metadata]);
         return result.lastID!;
@@ -1345,6 +1279,7 @@ export class GridBotDB {
     const result = await this.dbRun(`
       INSERT INTO trades (bot_id, order_id, fill_id, side, quantity, price, fee, fee_currency, pnl_usdt, round_trip_profit)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      RETURNING id
     `, [params.bot_id, params.order_id, params.fill_id, params.side, params.quantity,
         params.price, params.fee, params.fee_currency, params.pnl_usdt, params.round_trip_profit]);
 
@@ -1382,6 +1317,7 @@ export class GridBotDB {
     const result = await this.dbRun(`
       INSERT INTO funding_history (bot_id, instrument, funding_rate, payment_usdt, position_size, funding_time)
       VALUES (?, ?, ?, ?, ?, ?)
+      RETURNING id
     `, [params.bot_id, params.instrument, params.funding_rate, 
         params.payment_usdt, params.position_size, params.funding_time]);
 
@@ -1407,12 +1343,27 @@ export class GridBotDB {
   async createDailySnapshot(params: Omit<DailySnapshot, 'id' | 'created_at'>): Promise<number> {
     const ts = new Date(params.date + 'T00:00:00Z').toISOString();
     const result = await this.dbRun(`
-      INSERT OR REPLACE INTO daily_snapshots
+      INSERT INTO daily_snapshots
       (bot_id, date, timestamp, equity, balance_usdt, equity_usdt,
        grid_profit_net, grid_profit_usdt, trend_pnl, trend_pnl_usdt,
        total_pnl, total_pnl_usdt, round_trips, num_round_trips,
        eth_price, position_size, drawdown_pct)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)
+      ON CONFLICT (bot_id, date) DO UPDATE SET
+        timestamp = excluded.timestamp,
+        equity = excluded.equity,
+        balance_usdt = excluded.balance_usdt,
+        equity_usdt = excluded.equity_usdt,
+        grid_profit_net = excluded.grid_profit_net,
+        grid_profit_usdt = excluded.grid_profit_usdt,
+        trend_pnl = excluded.trend_pnl,
+        trend_pnl_usdt = excluded.trend_pnl_usdt,
+        total_pnl = excluded.total_pnl,
+        total_pnl_usdt = excluded.total_pnl_usdt,
+        round_trips = excluded.round_trips,
+        num_round_trips = excluded.num_round_trips,
+        eth_price = excluded.eth_price
+      RETURNING id
     `, [
       params.bot_id, params.date, ts,
       params.equity, params.equity, params.equity,
@@ -1487,9 +1438,10 @@ export class GridBotDB {
     instrument: string | null;
   }): Promise<boolean> {
     const result = await this.dbRun(`
-      INSERT OR IGNORE INTO fills_archive
+      INSERT INTO fills_archive
         (fill_id, event_time, is_buyer, price, size, fee, created_at, bot_id, instrument)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT (fill_id) DO NOTHING
     `, [
       params.fill_id,
       params.event_time,
@@ -1746,9 +1698,10 @@ export class GridBotDB {
     created_at: string;
   }): Promise<boolean> {
     const result = await this.dbRun(`
-      INSERT OR IGNORE INTO paired_roundtrips
+      INSERT INTO paired_roundtrips
         (bot_id, buy_fill_id, sell_fill_id, buy_price, sell_price, size, profit, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT (buy_fill_id, sell_fill_id) DO NOTHING
     `, [
       params.bot_id,
       params.buy_fill_id,
@@ -1783,14 +1736,7 @@ export class GridBotDB {
     return row?.f || 0;
   }
 
-  /**
-   * Escape hatch: return the raw sqlite3.Database handle.
-   * Used by the v2 server (ws-dispatcher, v2-router) which need direct
-   * `db.all` / `db.get` access for parameterized queries that don't fit
-   * the wrapper's narrow CRUD methods. Do NOT use this in regular bot
-   * logic — it bypasses the typed helpers.
-   */
-  getRawDb(): sqlite3.Database {
+  getExecutor(): PostgresExecutor {
     return this.db;
   }
 
@@ -1849,6 +1795,7 @@ export class GridBotDB {
     id: UserId;
     email: string;
     password_hash: string;
+    email_verified: number;
     is_admin: number;
     google_sub: string | null;
     created_at: number;
@@ -1861,6 +1808,7 @@ export class GridBotDB {
     id: UserId;
     email: string;
     password_hash: string;
+    email_verified: number;
     is_admin: number;
     google_sub: string | null;
     created_at: number;
@@ -1873,6 +1821,7 @@ export class GridBotDB {
     id: UserId;
     email: string;
     password_hash: string;
+    email_verified: number;
     is_admin: number;
     google_sub: string | null;
     created_at: number;
@@ -1933,6 +1882,13 @@ export class GridBotDB {
     );
   }
 
+  async markUserEmailVerified(userId: UserId): Promise<void> {
+    await this.dbRun(
+      `UPDATE users SET email_verified = 1 WHERE id = ?`,
+      [userId]
+    );
+  }
+
   async countUsers(): Promise<number> {
     const row = await this.dbGet(`SELECT COUNT(*) as c FROM users`);
     return (row?.c as number) ?? 0;
@@ -1942,6 +1898,82 @@ export class GridBotDB {
     await this.dbRun(
       `UPDATE users SET password_hash = ? WHERE id = ?`,
       [password_hash, userId]
+    );
+  }
+
+  // ─── Email OTP challenges ──────────────────────────────────────
+
+  async createEmailOtpChallenge(params: {
+    id: string;
+    user_id: UserId;
+    purpose: 'signup' | 'login';
+    code_hash: string;
+    expires_at: number;
+    ip_address: string | null;
+  }): Promise<void> {
+    await this.dbRun(
+      `UPDATE email_otp_challenges
+       SET consumed_at = ?
+       WHERE user_id = ? AND purpose = ? AND consumed_at IS NULL`,
+      [Date.now(), params.user_id, params.purpose]
+    );
+    await this.dbRun(
+      `INSERT INTO email_otp_challenges
+        (id, user_id, purpose, code_hash, expires_at, created_at, ip_address)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [
+        params.id,
+        params.user_id,
+        params.purpose,
+        params.code_hash,
+        params.expires_at,
+        Date.now(),
+        params.ip_address,
+      ]
+    );
+  }
+
+  async getEmailOtpChallenge(id: string): Promise<{
+    id: string;
+    user_id: UserId;
+    purpose: 'signup' | 'login';
+    code_hash: string;
+    expires_at: number;
+    consumed_at: number | null;
+    attempts: number;
+  } | null> {
+    return await this.dbGet(
+      `SELECT id, user_id, purpose, code_hash, expires_at, consumed_at, attempts
+       FROM email_otp_challenges WHERE id = ?`,
+      [id]
+    );
+  }
+
+  async incrementEmailOtpAttempts(id: string): Promise<void> {
+    await this.dbRun(
+      `UPDATE email_otp_challenges SET attempts = attempts + 1 WHERE id = ?`,
+      [id]
+    );
+  }
+
+  async consumeEmailOtpChallenge(id: string): Promise<boolean> {
+    const result = await this.dbRun(
+      `UPDATE email_otp_challenges SET consumed_at = ? WHERE id = ? AND consumed_at IS NULL`,
+      [Date.now(), id]
+    );
+    return result.changes === 1;
+  }
+
+  async rotateEmailOtpChallenge(
+    id: string,
+    code_hash: string,
+    expires_at: number
+  ): Promise<void> {
+    await this.dbRun(
+      `UPDATE email_otp_challenges
+       SET code_hash = ?, expires_at = ?, attempts = 0, created_at = ?
+       WHERE id = ? AND consumed_at IS NULL`,
+      [code_hash, expires_at, Date.now(), id]
     );
   }
 
@@ -1955,7 +1987,8 @@ export class GridBotDB {
   }): Promise<number> {
     const result = await this.dbRun(
       `INSERT INTO password_reset_tokens (user_id, token_hash, expires_at, created_at, ip_address)
-       VALUES (?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?)
+       RETURNING id`,
       [params.user_id, params.token_hash, params.expires_at, Date.now(), params.ip_address]
     );
     return result.lastID ?? 0;
@@ -2201,7 +2234,8 @@ export class GridBotDB {
         encrypted_account_id, account_id_iv, account_id_tag,
         encrypted_sub_account_id, sub_account_id_iv, sub_account_id_tag,
         is_default, last_test_ok, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      RETURNING id`,
       [
         params.user_id, params.label,
         params.encrypted_api_key, params.api_key_iv, params.api_key_tag,
@@ -2214,6 +2248,7 @@ export class GridBotDB {
         now,
       ]
     );
+    if (result.lastID === undefined) throw new Error('Failed to create GRVT sub-account');
     return result.lastID;
   }
 
@@ -2325,17 +2360,8 @@ export class GridBotDB {
    * Cerrar conexión a database
    */
   async close(): Promise<void> {
-    return new Promise((resolve, reject) => {
-      this.db.close((err) => {
-        if (err) {
-          console.error('❌ Error cerrando database:', err);
-          reject(err);
-        } else {
-          console.log('📊 Database cerrada');
-          resolve();
-        }
-      });
-    });
+    await this.db.close();
+    console.log('📊 PostgreSQL database cerrada');
   }
 }
 

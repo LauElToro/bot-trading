@@ -2,7 +2,7 @@
 // dispatcher, v2 router) into an existing Express app + HTTP server.
 //
 // The legacy `src/dashboard/server.ts` calls this once at startup, passing
-// in the things it already has (express app, http server, sqlite db,
+// in the things it already has (express app, http server, PostgreSQL executor,
 // grvt client, grid engine). All the new functionality is added without
 // touching the legacy code paths.
 //
@@ -12,14 +12,15 @@
 import type { Router } from 'express';
 import type { Server as HttpServer } from 'node:http';
 import type { EventEmitter } from 'node:events';
-import type Database from 'sqlite3';
 
 import { GrvtWebSocketServer } from './ws-server.js';
 import { WsDispatcher } from './ws-dispatcher.js';
 import { createV2Router } from './v2-router.js';
 import { childLogger } from './logger.js';
 import type { GridBotDB } from '../database/db.js';
+import type { QueryExecutor } from '../database/postgres.js';
 import { verifyToken } from '../auth/jwt.js';
+import type { UserId } from '../auth/user-id.js';
 
 const log = childLogger('v2-bootstrap');
 
@@ -43,6 +44,7 @@ interface GrvtClient {
 // Same shape as the one in v2-router.ts EngineOps.
 interface EngineOps {
   createBot(config: {
+    userId: UserId;
     pair: string;
     direction: 'long' | 'short';
     leverage: number;
@@ -70,7 +72,7 @@ export interface MountV2Options {
    */
   setRouter: (router: Router) => void;
   httpServer: HttpServer;
-  db: Database.Database;
+  db: QueryExecutor;
   // Higher-level wrapper around the same db. Exposes per-user CRUD
   // (createUser, upsertGrvtCredentials, getBotsForUser, etc) that
   // the multi-tenant auth endpoints depend on. Required.
@@ -119,20 +121,16 @@ export function mountV2(opts: MountV2Options): V2Handles {
       const m = /^bot:(\d+)$/.exec(channel);
       if (!m) return true;
       const botId = parseInt(m[1]!, 10);
-      const row = await new Promise<{ user_id: string | null } | undefined>((resolve) => {
-        db.get(
+      let row: { user_id: string | null } | undefined;
+      try {
+        row = await db.get<{ user_id: string | null }>(
           `SELECT user_id FROM grid_bots WHERE id = ?`,
-          [botId],
-          (err: Error | null, row: { user_id: string | null } | undefined) => {
-            if (err) {
-              log.warn({ err, botId, userId }, 'ws authorizeChannel: db error');
-              resolve(undefined);
-              return;
-            }
-            resolve(row);
-          }
+          [botId]
         );
-      });
+      } catch (err) {
+        log.warn({ err, botId, userId }, 'ws authorizeChannel: db error');
+        return false;
+      }
       if (!row || row.user_id == null) return false;
       return row.user_id === userId;
     },

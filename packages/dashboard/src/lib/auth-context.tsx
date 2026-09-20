@@ -19,6 +19,7 @@ import {
   clearSessionTokens,
   loadStoredSession,
   setAuthToken,
+  type OtpChallenge,
 } from './api-client';
 import { wsClient } from './ws-client';
 
@@ -35,12 +36,14 @@ interface AuthCtx {
   user: AuthUser | null;
   token: string | null;
   loading: boolean;
-  login: (email: string, password: string) => Promise<void>;
+  login: (email: string, password: string, lang?: 'es' | 'en') => Promise<OtpChallenge>;
   loginWithGoogle: (idToken: string, extras?: {
     acceptedTerms?: boolean;
     tosLang?: 'es' | 'en';
   }) => Promise<void>;
-  signup: (email: string, password: string, tosLang?: 'es' | 'en') => Promise<void>;
+  signup: (email: string, password: string, tosLang?: 'es' | 'en') => Promise<OtpChallenge>;
+  verifyOtp: (challengeId: string, code: string, email: string) => Promise<void>;
+  resendOtp: (challengeId: string, lang?: 'es' | 'en') => Promise<void>;
   logout: () => void;
   refreshMe: () => Promise<void>;
 }
@@ -101,8 +104,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => window.removeEventListener('auth:logout', handler);
   }, [logout]);
 
-  const login = useCallback(async (email: string, password: string) => {
-    const res = await api.login(email, password);
+  const login = useCallback(async (
+    email: string,
+    password: string,
+    lang: 'es' | 'en' = 'en'
+  ) => {
+    return api.login(email, password, lang);
+  }, []);
+
+  const verifyOtp = useCallback(async (
+    challengeId: string,
+    code: string,
+    email: string
+  ) => {
+    const res = await api.verifyOtp(challengeId, code);
     applyAccessToken(res.token);
     setUser({
       id: res.userId,
@@ -113,6 +128,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       lastLoginAt: null,
     });
   }, [applyAccessToken]);
+
+  const resendOtp = useCallback(async (
+    challengeId: string,
+    lang: 'es' | 'en' = 'en'
+  ) => {
+    await api.resendOtp(challengeId, lang);
+  }, []);
 
   const loginWithGoogle = useCallback(async (
     idToken: string,
@@ -136,21 +158,34 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     password: string,
     tosLang: 'es' | 'en' = 'en'
   ) => {
-    const res = await api.signup(email, password, tosLang);
-    applyAccessToken(res.token);
-    setUser({
-      id: res.userId,
-      email,
-      isAdmin: res.isAdmin,
-      hasGrvtCreds: false,
-      createdAt: Date.now(),
-      lastLoginAt: null,
-    });
-  }, [applyAccessToken]);
+    return api.signup(email, password, tosLang);
+  }, []);
 
   const value = useMemo<AuthCtx>(
-    () => ({ user, token, loading, login, loginWithGoogle, signup, logout, refreshMe }),
-    [user, token, loading, login, loginWithGoogle, signup, logout, refreshMe]
+    () => ({
+      user,
+      token,
+      loading,
+      login,
+      loginWithGoogle,
+      signup,
+      verifyOtp,
+      resendOtp,
+      logout,
+      refreshMe,
+    }),
+    [
+      user,
+      token,
+      loading,
+      login,
+      loginWithGoogle,
+      signup,
+      verifyOtp,
+      resendOtp,
+      logout,
+      refreshMe,
+    ]
   );
 
   return (

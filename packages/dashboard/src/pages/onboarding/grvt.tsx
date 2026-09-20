@@ -45,7 +45,7 @@ export function GrvtOnboardingPage() {
       });
       toast.success(t('onboarding.grvt.saved'));
       await refreshMe();
-      navigate('/', { replace: true });
+      navigate('/dashboard', { replace: true });
     } catch (err) {
       toast.error((err as Error).message || t('onboarding.grvt.saveFailed'));
     } finally {

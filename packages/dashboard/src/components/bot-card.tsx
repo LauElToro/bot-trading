@@ -65,7 +65,7 @@ export function BotCard({ bot }: BotCardProps) {
 
   return (
     <Link
-      to={`/bots/${bot.id}`}
+      to={`/dashboard/bots/${bot.id}`}
       // The Link itself gets no outline because we move the focus indicator
       // to the Card border below — more on-style. The global *:focus-visible
       // rule in globals.css would otherwise paint a primary outline outside

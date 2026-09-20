@@ -1,7 +1,7 @@
 // Toro notifier — main worker loop.
 //
 // Runs as a standalone systemd service alongside the bot. Reads the bot's
-// SQLite file (read-only), detects new events, and pushes notifications
+// PostgreSQL database, detects new events, and pushes notifications
 // to Telegram. Cursor state lives in a JSON file in NOTIFIER_STATE_DIR
 // so we don't re-send across restarts.
 //
@@ -16,6 +16,8 @@
 
 import dotenv from 'dotenv';
 import { createServer, type Server } from 'node:http';
+import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { NotifierDb, type BotRow } from './db.js';
 import { TelegramClient } from './telegram.js';
 import { StateStore } from './state.js';
@@ -34,8 +36,8 @@ dotenv.config();
 
 const log = childLogger('main');
 
-interface NotifierConfig {
-  dbPath: string;
+export interface NotifierConfig {
+  databaseUrl: string;
   pollMs: number;
   drawdownPct: number;
   fillBatch: number;
@@ -56,26 +58,83 @@ interface NotifierConfig {
   operatorUserId: string;
 }
 
-function loadConfig(): NotifierConfig {
+export function loadConfig(env: NodeJS.ProcessEnv = process.env): NotifierConfig {
+  const databaseUrl = env.NOTIFIER_DATABASE_URL || env.DATABASE_URL;
+  if (!databaseUrl) {
+    throw new Error('NOTIFIER_DATABASE_URL or DATABASE_URL is required');
+  }
   return {
-    dbPath: process.env.GRID_BOT_DB ?? '/opt/grvt-grid-bot/data/grid_bot.db',
-    pollMs: parseInt(process.env.NOTIFIER_POLL_MS ?? '10000', 10),
-    drawdownPct: parseFloat(process.env.NOTIFY_DRAWDOWN_PCT ?? '15'),
-    fillBatch: parseInt(process.env.NOTIFY_FILL_BATCH ?? '5', 10),
-    liqProximityPct: parseFloat(process.env.NOTIFY_LIQ_PROXIMITY_PCT ?? '15'),
-    dailySummaryHour: parseInt(process.env.DAILY_SUMMARY_HOUR_UTC ?? '0', 10),
-    stateDir: process.env.NOTIFIER_STATE_DIR ?? '/var/lib/grvt-grid-notifier',
-    telegramToken: process.env.TELEGRAM_BOT_TOKEN,
-    telegramChatId: process.env.TELEGRAM_CHAT_ID,
-    webhookUrl: process.env.WEBHOOK_URL,
-    webhookSecret: process.env.WEBHOOK_SECRET,
-    mutedHoursStart: parseInt(process.env.MUTED_HOURS_START_UTC ?? '-1', 10),
-    mutedHoursEnd: parseInt(process.env.MUTED_HOURS_END_UTC ?? '-1', 10),
-    operatorUserId: (process.env.OPERATOR_USER_ID ?? '').trim(),
+    databaseUrl,
+    pollMs: parseInt(env.NOTIFIER_POLL_MS ?? '10000', 10),
+    drawdownPct: parseFloat(env.NOTIFY_DRAWDOWN_PCT ?? '15'),
+    fillBatch: parseInt(env.NOTIFY_FILL_BATCH ?? '5', 10),
+    liqProximityPct: parseFloat(env.NOTIFY_LIQ_PROXIMITY_PCT ?? '15'),
+    dailySummaryHour: parseInt(env.DAILY_SUMMARY_HOUR_UTC ?? '0', 10),
+    stateDir: env.NOTIFIER_STATE_DIR ?? '/var/lib/grvt-grid-notifier',
+    telegramToken: env.TELEGRAM_BOT_TOKEN,
+    telegramChatId: env.TELEGRAM_CHAT_ID,
+    webhookUrl: env.WEBHOOK_URL,
+    webhookSecret: env.WEBHOOK_SECRET,
+    mutedHoursStart: parseInt(env.MUTED_HOURS_START_UTC ?? '-1', 10),
+    mutedHoursEnd: parseInt(env.MUTED_HOURS_END_UTC ?? '-1', 10),
+    operatorUserId: (env.OPERATOR_USER_ID ?? '').trim(),
   };
 }
 
-class Notifier {
+export interface HealthReport {
+  healthy: boolean;
+  body: {
+    status: 'ok' | 'starting' | 'stale' | 'db_error';
+    lastTickAt: number | null;
+    tickCount: number;
+    elapsedMs: number | null;
+    lastDbPingAt: number | null;
+    dbPingOk: boolean | null;
+    dbPingError: string | null;
+    pollMs: number;
+    uptime: number;
+  };
+}
+
+export function getHealthReport(
+  now: number,
+  pollMs: number,
+  lastTickAt: number,
+  tickCount: number,
+  lastDbPingAt: number,
+  dbPingOk: boolean | null,
+  dbPingError: string | null,
+): HealthReport {
+  const maxAge = pollMs * 3;
+  const elapsed = lastTickAt ? now - lastTickAt : null;
+  const tickFresh = elapsed === null || elapsed < maxAge;
+  const pingElapsed = lastDbPingAt ? now - lastDbPingAt : null;
+  const pingFresh = pingElapsed === null || pingElapsed < maxAge;
+  const healthy = tickFresh && dbPingOk !== false && pingFresh;
+  const status = !tickFresh || !pingFresh
+    ? 'stale'
+    : dbPingOk === false
+      ? 'db_error'
+      : dbPingOk === null
+        ? 'starting'
+        : 'ok';
+  return {
+    healthy,
+    body: {
+      status,
+      lastTickAt: lastTickAt || null,
+      tickCount,
+      elapsedMs: elapsed,
+      lastDbPingAt: lastDbPingAt || null,
+      dbPingOk,
+      dbPingError,
+      pollMs,
+      uptime: Math.floor(process.uptime()),
+    },
+  };
+}
+
+export class Notifier {
   private readonly cfg: NotifierConfig;
   private readonly db: NotifierDb;
   private readonly telegram: TelegramClient;
@@ -84,6 +143,10 @@ class Notifier {
   private stopping = false;
   private lastTickAt: number = 0;
   private tickCount: number = 0;
+  private lastDbPingAt: number = 0;
+  private dbPingOk: boolean | null = null;
+  private dbPingError: string | null = null;
+  private dbPingInFlight: Promise<void> | null = null;
   private healthServer: Server | null = null;
 
   private readonly webhook: WebhookClient;
@@ -91,7 +154,7 @@ class Notifier {
 
   constructor(cfg: NotifierConfig) {
     this.cfg = cfg;
-    this.db = new NotifierDb(cfg.dbPath);
+    this.db = new NotifierDb(cfg.databaseUrl);
     this.telegram = new TelegramClient(cfg.telegramToken, cfg.telegramChatId);
     this.webhook = new WebhookClient(cfg.webhookUrl, cfg.webhookSecret);
     this.email = new EmailClient();
@@ -213,30 +276,26 @@ class Notifier {
       log.info({ cursors: newCursors, hwm: newHwm }, 'bootstrap state (per-user)');
     }
 
-    // C.10: health endpoint for Docker HEALTHCHECK. Minimal HTTP
-    // server on NOTIFIER_HEALTH_PORT (default 3849). Returns 200 if
-    // the last tick ran within 3× the poll interval, 503 otherwise.
+    // The request handler only reads cached tick/ping state; it never waits
+    // for PostgreSQL and remains responsive during a database outage.
     const healthPort = parseInt(process.env.NOTIFIER_HEALTH_PORT ?? '3849', 10);
     this.healthServer = createServer((_req, res) => {
-      const maxAge = this.cfg.pollMs * 3;
-      const elapsed = Date.now() - this.lastTickAt;
-      // Before the first tick fires, lastTickAt is 0. Treat as healthy
-      // during startup (within maxAge of boot).
-      const healthy = this.lastTickAt === 0 || elapsed < maxAge;
-      const body = JSON.stringify({
-        status: healthy ? 'ok' : 'stale',
-        lastTickAt: this.lastTickAt || null,
-        tickCount: this.tickCount,
-        elapsedMs: this.lastTickAt ? elapsed : null,
-        pollMs: this.cfg.pollMs,
-        uptime: Math.floor(process.uptime()),
-      });
-      res.writeHead(healthy ? 200 : 503, { 'Content-Type': 'application/json' });
-      res.end(body);
+      const report = getHealthReport(
+        Date.now(),
+        this.cfg.pollMs,
+        this.lastTickAt,
+        this.tickCount,
+        this.lastDbPingAt,
+        this.dbPingOk,
+        this.dbPingError,
+      );
+      res.writeHead(report.healthy ? 200 : 503, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(report.body));
     });
     this.healthServer.listen(healthPort, () => {
       log.info({ port: healthPort }, 'health endpoint listening');
     });
+    void this.refreshDbHealth();
 
     log.info('sending hello message to telegram');
     await this.telegram.send('🟢 *Toro notifier online*');
@@ -262,10 +321,31 @@ class Notifier {
     //  sent. systemd kept restart-looping it.)
   }
 
+  private refreshDbHealth(): Promise<void> {
+    if (this.dbPingInFlight) return this.dbPingInFlight;
+    this.dbPingInFlight = this.db.ping().then(
+      () => {
+        this.lastDbPingAt = Date.now();
+        this.dbPingOk = true;
+        this.dbPingError = null;
+      },
+      (error: unknown) => {
+        this.lastDbPingAt = Date.now();
+        this.dbPingOk = false;
+        this.dbPingError = error instanceof Error ? error.message : String(error);
+        log.warn({ err: this.dbPingError }, 'database health ping failed');
+      },
+    ).finally(() => {
+      this.dbPingInFlight = null;
+    });
+    return this.dbPingInFlight;
+  }
+
   private async tick(): Promise<void> {
     try {
       this.lastTickAt = Date.now();
       this.tickCount++;
+      await this.refreshDbHealth();
       const bots = await this.db.getAllBots();
       const muted = this.isMuted();
 
@@ -503,12 +583,17 @@ class Notifier {
   }
 
   async stop(): Promise<void> {
+    if (this.stopping) return;
     this.stopping = true;
     if (this.timer) clearTimeout(this.timer);
     if (this.healthServer) {
-      this.healthServer.close();
+      const server = this.healthServer;
       this.healthServer = null;
+      await new Promise<void>((resolveClose, rejectClose) => {
+        server.close((error) => error ? rejectClose(error) : resolveClose());
+      });
     }
+    await this.dbPingInFlight;
     await this.telegram.send('⚪ *Toro notifier offline*');
     await this.db.close();
     log.info('notifier stopped');
@@ -546,10 +631,16 @@ async function main(): Promise<void> {
   await notifier.start();
 }
 
-main().catch((err) => {
-  log.fatal(
-    { err: err instanceof Error ? err.message : String(err), stack: err instanceof Error ? err.stack : undefined },
-    'main() failed during boot'
-  );
-  process.exit(1);
-});
+const isMain = process.argv[1]
+  ? fileURLToPath(import.meta.url) === resolve(process.argv[1])
+  : false;
+
+if (isMain) {
+  main().catch((err) => {
+    log.fatal(
+      { err: err instanceof Error ? err.message : String(err), stack: err instanceof Error ? err.stack : undefined },
+      'main() failed during boot'
+    );
+    process.exit(1);
+  });
+}

@@ -9,8 +9,8 @@ Docs: [README](README.md), [INSTALL](docs/INSTALL.md), [SECURITY](SECURITY.md).
 Ajustes locales para Docker en Windows:
 
 - `packages/dashboard/src/vite-env.d.ts` — tipos de Vite para que compile el SPA.
-- `packages/bot/Dockerfile` — `npm rebuild sqlite3 --build-from-source`.
-- `docker-compose.yml` — monta `secrets/master.key` de solo lectura.
+- `DATABASE_URL` — conexión TLS a un PostgreSQL externo.
+- `CREDENTIAL_MASTER_KEY` — clave AES-256 codificada en base64.
 
 ## Estado del arranque
 
@@ -18,13 +18,12 @@ Ajustes locales para Docker en Windows:
 |------|--------|
 | Dashboard | http://localhost:3848/dashboard/ |
 | Health | http://localhost:3848/api/health |
-| `MOCK_MODE` | `true` — no autentica contra GRVT |
 | `DRY_RUN` | `true` — si hay sesión GRVT, **no envía órdenes** |
-| Master key | `secrets/master.key` (32 bytes), montada en `/etc/grvt-grid/master.key` |
-| DB | `data/grid_bot.db` (aparece al primer boot) |
+| Master key | `CREDENTIAL_MASTER_KEY` en `.env` |
+| DB | PostgreSQL externo (`DATABASE_URL`) |
 | Primer usuario | `OWNER_EMAIL` / `OWNER_INITIAL_PASSWORD` en `.env` |
 
-`.env` y `secrets/` están en `.gitignore`. No los commitees.
+`.env` está en `.gitignore`. No lo commitees.
 
 ## Comandos
 
@@ -61,7 +60,7 @@ El wizard pide **tus** números. No hay defaults de trading inventados acá.
 
 1. Creá la API como en [`CUENTA-OPERADOR.md`](CUENTA-OPERADOR.md): Trading Account + permiso **Trade** solamente.
 2. Pegá las credenciales en el dashboard (Conectar GRVT).
-3. Dejá `DRY_RUN=true` y pasá `MOCK_MODE=false`. Recreá: `docker compose up -d`.
+3. Dejá `DRY_RUN=true`. Recreá: `docker compose up -d`.
 4. En el dashboard: crear bot **pausado**. Completá vos rango, N, inversión, leverage, SL/TP.
 5. Usá el **backtest** con tus números antes de capital real.
 6. Recién cuando estés conforme: `DRY_RUN=false`, `docker compose up -d`, y **start** desde la UI.
@@ -73,14 +72,13 @@ El wizard pide **tus** números. No hay defaults de trading inventados acá.
 
 ## Backups
 
-Guardá fuera de esta PC, juntos:
+Guardá fuera de esta PC:
 
-- `data/` (SQLite + WAL)
-- `secrets/master.key`
+- dumps PostgreSQL generados con `pg_dump`
+- `CREDENTIAL_MASTER_KEY` en un password manager
 
 Sin la master key, las credenciales GRVT cifradas en la DB no se pueden descifrar.
 
-## Telegram / HTTPS (después)
+## Telegram (después)
 
 - Alertas: `docker compose --profile with-notifier up -d` + `TELEGRAM_*` en `.env`.
-- 24/7 en un VPS: mismo `docker-compose.yml`, perfil `with-tls` y dominio en `Caddyfile`.

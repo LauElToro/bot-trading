@@ -28,11 +28,13 @@ What happens to your bot when the GRVT API becomes unreachable.
 
 - **SIGTERM (systemd restart):** Graceful shutdown — drains in-flight tasks, preserves orders on GRVT, closes DB cleanly. Orders survive the restart.
 - **SIGINT (Ctrl+C):** Cancels all orders, pauses bots, closes DB. Use only in development.
-- **Kill -9 / OOM:** Ungraceful — orders stay on GRVT (they're server-side), but the DB may need WAL recovery on next start (SQLite handles this automatically).
+- **Kill -9 / OOM:** Ungraceful — orders stay on GRVT (they're server-side).
+  PostgreSQL rolls back incomplete transactions; the bot reconciles exchange
+  state on the next start.
 
 ## Recommendations
 
 1. **Don't panic during outages.** Your orders are safe on GRVT.
 2. **Check the health endpoint** (`/api/v2/health`) to see if it's a GRVT issue or a local issue.
 3. **Set up the notifier** with Telegram — it will alert you on status changes and drawdown events.
-4. **Enable automated backups** (`scripts/backup.sh` via cron) so a catastrophic DB loss doesn't mean total data loss.
+4. **Enable automated `pg_dump` backups** and provider snapshots so a catastrophic DB loss doesn't mean total data loss.

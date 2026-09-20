@@ -3,20 +3,15 @@
 # What this stack runs:
 #   - bot:      the trading engine + dashboard backend (Express + WS) + SPA
 #   - notifier: Telegram sidecar (optional — disable if you don't want alerts)
-#   - caddy:    HTTPS reverse proxy with automatic Let's Encrypt cert (optional
-#               but recommended if you point a domain at this host)
 #
 # Usage:
 #   1. cp .env.example .env  &&  edit .env with your GRVT API keys
 #   2. docker compose up -d
-#   3. open https://your-domain/dashboard/  (or http://localhost:3848/dashboard/
-#      if you skip caddy by using the `--profile no-tls` flag)
+#   3. open http://localhost:3848/dashboard/
 #
 # Data persistence:
-#   - ./data    → bot's SQLite db + WAL files (uid 10000)
+#   - PostgreSQL is external and configured with DATABASE_URL
 #   - ./logs    → bot + notifier logs
-#   - ./secrets/master.key → AES-256-GCM master key (MUST survive rebuilds)
-#   - ./caddy-data + ./caddy-config → caddy state (Let's Encrypt cert cache)
 #
 # Stopping safely: `docker compose stop bot` sends SIGTERM, which the bot
 # catches and uses to gracefully cancel its monitoring loop while leaving
@@ -37,14 +32,11 @@ services:
       NODE_ENV: production
       DASHBOARD_PORT: "3848"
       LOG_LEVEL: "${LOG_LEVEL:-info}"
-      MASTER_KEY_PATH: /etc/grvt-grid/master.key
+      DATABASE_URL: "${DATABASE_URL:?DATABASE_URL is required}"
+      CREDENTIAL_MASTER_KEY: "${CREDENTIAL_MASTER_KEY:?CREDENTIAL_MASTER_KEY is required}"
     volumes:
-      - ./data:/app/data
       - ./logs/bot:/app/logs
-      - ./secrets/master.key:/etc/grvt-grid/master.key:ro
     ports:
-      # Direct port for `--profile no-tls` deployments. With caddy, you can
-      # remove this binding so only caddy is reachable from the internet.
       - "${BOT_PORT:-3848}:3848"
     healthcheck:
       test: ["CMD", "curl", "-fs", "http://127.0.0.1:3848/api/health"]
@@ -65,13 +57,10 @@ services:
     env_file: .env
     environment:
       NODE_ENV: production
-      GRID_BOT_DB: /shared-data/grid_bot.db
       NOTIFIER_STATE_DIR: /var/lib/grvt-grid-notifier
       LOG_LEVEL: "${LOG_LEVEL:-info}"
       NOTIFIER_HEALTH_PORT: "3849"
     volumes:
-      # READ-ONLY mount of the bot's data dir — defense in depth.
-      - ./data:/shared-data:ro
       - notifier-state:/var/lib/grvt-grid-notifier
       - ./logs/notifier:/app/logs
     depends_on:
@@ -85,23 +74,5 @@ services:
       start_period: 30s
     profiles: ["full", "with-notifier"]
 
-  caddy:
-    image: caddy:2-alpine
-    container_name: grvt-grid-caddy
-    restart: unless-stopped
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy-data:/data
-      - caddy-config:/config
-    depends_on:
-      bot:
-        condition: service_healthy
-    profiles: ["full", "with-tls"]
-
 volumes:
   notifier-state:
-  caddy-data:
-  caddy-config:

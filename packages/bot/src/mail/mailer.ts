@@ -110,6 +110,52 @@ export async function sendWelcomeEmail(to: string): Promise<void> {
   });
 }
 
+export async function sendAuthenticationCode(params: {
+  to: string;
+  code: string;
+  purpose: 'signup' | 'login';
+  lang: 'es' | 'en';
+  expiresInMinutes: number;
+}): Promise<boolean> {
+  const isSpanish = params.lang === 'es';
+  const action = isSpanish
+    ? params.purpose === 'signup'
+      ? 'verificar tu email'
+      : 'iniciar sesión'
+    : params.purpose === 'signup'
+      ? 'verify your email'
+      : 'sign in';
+  const subject = isSpanish
+    ? `${params.code} es tu código de Toro`
+    : `${params.code} is your Toro code`;
+  const intro = isSpanish
+    ? `Usá este código para ${action}.`
+    : `Use this code to ${action}.`;
+  const expiry = isSpanish
+    ? `Vence en ${params.expiresInMinutes} minutos y solo puede usarse una vez.`
+    : `It expires in ${params.expiresInMinutes} minutes and can only be used once.`;
+  const warning = isSpanish
+    ? 'Si no solicitaste este código, ignorá este email.'
+    : 'If you did not request this code, ignore this email.';
+
+  return sendMail({
+    to: params.to,
+    subject,
+    text: `${intro}\n\n${params.code}\n\n${expiry}\n${warning}`,
+    html:
+      `<div style="background:#0c0a08;padding:32px;font-family:Arial,sans-serif;color:#f6f0e6">` +
+      `<div style="max-width:520px;margin:auto">` +
+      `<p style="color:#e8b84a;font-size:12px;letter-spacing:2px;margin:0 0 20px">TORO · SECURITY</p>` +
+      `<h1 style="font-size:22px;margin:0 0 12px">${intro}</h1>` +
+      `<div style="margin:28px 0;padding:20px;border:1px solid #4a3f32;background:#161310;` +
+      `font-family:monospace;font-size:36px;font-weight:700;letter-spacing:10px;text-align:center;color:#e8b84a">` +
+      `${params.code}</div>` +
+      `<p style="color:#d4c6b0;font-size:14px;line-height:1.6">${expiry}</p>` +
+      `<p style="color:#a89478;font-size:12px;line-height:1.6">${warning}</p>` +
+      `</div></div>`,
+  });
+}
+
 export async function sendNotificationEmail(params: {
   to: string;
   subject: string;

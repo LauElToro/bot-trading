@@ -38,9 +38,9 @@ export function AppShell() {
         clearTimeout(chordTimer.current);
 
         switch (chord) {
-          case 'go': navigate('/'); return;
-          case 'gb': navigate('/bots'); return;
-          case 'gs': navigate('/settings'); return;
+          case 'go': navigate('/dashboard'); return;
+          case 'gb': navigate('/dashboard/bots'); return;
+          case 'gs': navigate('/dashboard/settings'); return;
           case 'nb':
             window.dispatchEvent(new CustomEvent('wizard:open'));
             return;

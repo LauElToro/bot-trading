@@ -13,10 +13,10 @@ interface NavItem {
 }
 
 const NAV: NavItem[] = [
-  { to: '/', labelKey: 'nav.overview', icon: LayoutGrid, end: true },
-  { to: '/bots', labelKey: 'nav.bots', icon: Hexagon },
-  { to: '/backtest', labelKey: 'nav.backtest', icon: FlaskConical },
-  { to: '/settings', labelKey: 'nav.settings', icon: Settings },
+  { to: '/dashboard', labelKey: 'nav.overview', icon: LayoutGrid, end: true },
+  { to: '/dashboard/bots', labelKey: 'nav.bots', icon: Hexagon },
+  { to: '/dashboard/backtest', labelKey: 'nav.backtest', icon: FlaskConical },
+  { to: '/dashboard/settings', labelKey: 'nav.settings', icon: Settings },
 ];
 
 // Desktop sidebar (hidden on mobile — see BottomNav).

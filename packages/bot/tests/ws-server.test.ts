@@ -228,9 +228,11 @@ describe('GrvtWebSocketServer — JWT-mode ownership gating (C-2)', () => {
   let jwtServer: GrvtWebSocketServer;
   let jwtHttp: HttpServer;
   let jwtPort: number;
+  const userA = '11111111-1111-4111-8111-111111111111';
+  const userB = '22222222-2222-4222-8222-222222222222';
 
   const verifyToken = (token: string): { userId: string } | null => {
-    const m = /^user:(\d+)$/.exec(token);
+    const m = /^user:([0-9a-f-]{36})$/i.exec(token);
     if (!m) return null;
     return { userId: m[1]! };
   };
@@ -239,8 +241,8 @@ describe('GrvtWebSocketServer — JWT-mode ownership gating (C-2)', () => {
     const m = /^bot:(\d+)$/.exec(channel);
     if (!m) return true;
     const botId = parseInt(m[1]!, 10);
-    if (botId === 1) return userId === '1';
-    if (botId === 2) return userId === '2';
+    if (botId === 1) return userId === userA;
+    if (botId === 2) return userId === userB;
     return false;
   };
 
@@ -291,20 +293,20 @@ describe('GrvtWebSocketServer — JWT-mode ownership gating (C-2)', () => {
   });
 
   it('rejects JWT in the query string even if valid (close 4401)', async () => {
-    const ws = new WebSocket(`${jwtUrl()}?token=user:1`);
+    const ws = new WebSocket(`${jwtUrl()}?token=user:${userA}`);
     const closed = await nextClose(ws);
     expect(closed.code).toBe(4401);
   });
 
   it('accepts connection with valid JWT auth frame', async () => {
-    const { ws, queue } = await openAuthed('user:1');
+    const { ws, queue } = await openAuthed(`user:${userA}`);
     await new Promise((r) => setTimeout(r, 30));
     expect(queue[0]?.type).toBe('hello');
     ws.close();
   });
 
   it('rejects bot:<id> subscription when user does not own the bot', async () => {
-    const { ws, queue } = await openAuthed('user:1');
+    const { ws, queue } = await openAuthed(`user:${userA}`);
     await new Promise((r) => setTimeout(r, 30));
     ws.send(JSON.stringify({ type: 'subscribe', channels: ['bot:2'] }));
     await new Promise((r) => setTimeout(r, 50));
@@ -320,7 +322,7 @@ describe('GrvtWebSocketServer — JWT-mode ownership gating (C-2)', () => {
   });
 
   it('accepts bot:<id> subscription when the user owns the bot', async () => {
-    const { ws, queue } = await openAuthed('user:1');
+    const { ws, queue } = await openAuthed(`user:${userA}`);
     await new Promise((r) => setTimeout(r, 30));
     ws.send(JSON.stringify({ type: 'subscribe', channels: ['bot:1'] }));
     await new Promise((r) => setTimeout(r, 50));
@@ -340,7 +342,7 @@ describe('GrvtWebSocketServer — JWT-mode ownership gating (C-2)', () => {
   });
 
   it('mixed subscribe: owned bot accepted, foreign bot rejected, non-bot channel broadcast', async () => {
-    const { ws, queue } = await openAuthed('user:1');
+    const { ws, queue } = await openAuthed(`user:${userA}`);
     await new Promise((r) => setTimeout(r, 30));
     ws.send(JSON.stringify({ type: 'subscribe', channels: ['bot:1', 'bot:2', 'prices'] }));
     await new Promise((r) => setTimeout(r, 50));

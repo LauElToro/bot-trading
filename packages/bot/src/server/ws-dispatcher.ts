@@ -30,7 +30,7 @@
 import type { EventEmitter } from 'node:events';
 import { wsBus } from './ws-bus.js';
 import { childLogger } from './logger.js';
-import type Database from 'sqlite3';
+import type { QueryExecutor } from '../database/postgres.js';
 
 const log = childLogger('dispatcher');
 
@@ -63,8 +63,8 @@ interface PairedRoundtripRow {
 export interface DispatcherDeps {
   /** The GridEngine instance (or anything with .on(eventName, fn) — we type loosely to avoid pulling the giant grid-engine types in here). */
   engine: EventEmitter;
-  /** A sqlite3 Database that has both `grid_bots` and `paired_roundtrips` tables. */
-  db: Database.Database;
+  /** Async query executor for `grid_bots` and `paired_roundtrips`. */
+  db: QueryExecutor;
   /** Polling interval for the per-bot state tick. Default 1000ms. */
   tickIntervalMs?: number;
   /** Polling interval for the fill detector. Default 2000ms. */
@@ -73,7 +73,7 @@ export interface DispatcherDeps {
 
 export class WsDispatcher {
   private engine: EventEmitter;
-  private db: Database.Database;
+  private db: QueryExecutor;
   private tickIntervalMs: number;
   private fillIntervalMs: number;
 
@@ -164,101 +164,95 @@ export class WsDispatcher {
     this.tickTimer.unref?.();
   }
 
-  private broadcastBotTicks(): Promise<void> {
-    return new Promise((resolve) => {
-      this.db.all<BotRow>(
+  private async broadcastBotTicks(): Promise<void> {
+    let rows: BotRow[];
+    try {
+      rows = await this.db.all<BotRow>(
         `SELECT id, pair, status, position_size, avg_entry_price,
                 grid_profit_usdt, trend_pnl_usdt, total_pnl_usdt,
                 liquidation_price, num_grids, investment_usdt
-         FROM grid_bots`,
-        (err, rows) => {
-          if (err) {
-            log.error({ err: err.message }, 'tick query failed');
-            return resolve();
-          }
-          for (const bot of rows) {
-            const snapshot = {
-              id: bot.id,
-              status: bot.status,
-              positionSize: bot.position_size,
-              avgEntryPrice: bot.avg_entry_price,
-              gridProfit: bot.grid_profit_usdt,
-              trendPnl: bot.trend_pnl_usdt,
-              totalPnl: bot.total_pnl_usdt,
-              liquidationPrice: bot.liquidation_price,
-              ts: Date.now()
-            };
-            const serialized = JSON.stringify(snapshot);
-            // Skip if nothing changed since last tick — no point broadcasting
-            // (and animating in the UI) the same numbers.
-            if (this.lastSnapshot.get(bot.id) === serialized) continue;
-            this.lastSnapshot.set(bot.id, serialized);
-            wsBus.publish(`bot:${bot.id}`, 'tick', snapshot);
-          }
-          resolve();
-        }
+         FROM grid_bots`
       );
-    });
+    } catch (err) {
+      log.error({ err: (err as Error).message }, 'tick query failed');
+      return;
+    }
+    for (const bot of rows) {
+      const snapshot = {
+        id: bot.id,
+        status: bot.status,
+        positionSize: bot.position_size,
+        avgEntryPrice: bot.avg_entry_price,
+        gridProfit: bot.grid_profit_usdt,
+        trendPnl: bot.trend_pnl_usdt,
+        totalPnl: bot.total_pnl_usdt,
+        liquidationPrice: bot.liquidation_price,
+        ts: Date.now()
+      };
+      const serialized = JSON.stringify(snapshot);
+      // Skip if nothing changed since last tick — no point broadcasting
+      // (and animating in the UI) the same numbers.
+      if (this.lastSnapshot.get(bot.id) === serialized) continue;
+      this.lastSnapshot.set(bot.id, serialized);
+      wsBus.publish(`bot:${bot.id}`, 'tick', snapshot);
+    }
   }
 
   // ─── Fill detection poller ────────────────────────────────────────────
   private startFillPoller(): void {
     // First, find the highest existing roundtrip id so we don't replay history
     // on startup — only NEW roundtrips post-startup get broadcast as events.
-    this.db.get<{ max_id: number | null }>(
-      `SELECT MAX(id) as max_id FROM paired_roundtrips`,
-      (err, row) => {
-        if (err) {
-          log.warn({ err: err.message }, 'could not seed lastBroadcastRoundtripId');
-          return;
-        }
-        this.lastBroadcastRoundtripId = row?.max_id ?? 0;
-        log.info({ from: this.lastBroadcastRoundtripId }, 'fill poller seeded');
-
-        // Now start the periodic poll
-        this.fillTimer = setInterval(() => {
-          this.broadcastNewFills().catch((err) => log.error({ err }, 'fill broadcast failed'));
-        }, this.fillIntervalMs);
-        this.fillTimer.unref?.();
-      }
-    );
+    void this.seedFillPoller();
   }
 
-  private broadcastNewFills(): Promise<void> {
-    return new Promise((resolve) => {
-      this.db.all<PairedRoundtripRow & { bot_id: number | null }>(
+  private async seedFillPoller(): Promise<void> {
+    try {
+      const row = await this.db.get<{ max_id: number | null }>(
+        `SELECT MAX(id) as max_id FROM paired_roundtrips`
+      );
+      this.lastBroadcastRoundtripId = row?.max_id ?? 0;
+      log.info({ from: this.lastBroadcastRoundtripId }, 'fill poller seeded');
+      this.fillTimer = setInterval(() => {
+        this.broadcastNewFills().catch((err) => log.error({ err }, 'fill broadcast failed'));
+      }, this.fillIntervalMs);
+      this.fillTimer.unref?.();
+    } catch (err) {
+      log.warn({ err: (err as Error).message }, 'could not seed lastBroadcastRoundtripId');
+    }
+  }
+
+  private async broadcastNewFills(): Promise<void> {
+    let rows: Array<PairedRoundtripRow & { bot_id: number | null }>;
+    try {
+      rows = await this.db.all<PairedRoundtripRow & { bot_id: number | null }>(
         `SELECT id, bot_id, buy_fill_id, sell_fill_id, buy_price, sell_price, size, profit, created_at
          FROM paired_roundtrips
          WHERE id > ?
          ORDER BY id ASC`,
-        [this.lastBroadcastRoundtripId],
-        (err, rows) => {
-          if (err) {
-            log.error({ err: err.message }, 'fill query failed');
-            return resolve();
-          }
-          if (!rows || rows.length === 0) return resolve();
-
-          for (const rt of rows) {
-            const fill = {
-              id: rt.id,
-              botId: rt.bot_id,
-              buyFillId: rt.buy_fill_id,
-              sellFillId: rt.sell_fill_id,
-              buyPrice: rt.buy_price,
-              sellPrice: rt.sell_price,
-              size: rt.size,
-              profit: rt.profit,
-              createdAt: rt.created_at
-            };
-            wsBus.publish('fills', 'fill', fill);
-            if (rt.bot_id) wsBus.publish(`bot:${rt.bot_id}`, 'fill', fill);
-            this.lastBroadcastRoundtripId = rt.id;
-          }
-          log.debug({ count: rows.length, lastId: this.lastBroadcastRoundtripId }, 'broadcast new fills');
-          resolve();
-        }
+        [this.lastBroadcastRoundtripId]
       );
-    });
+    } catch (err) {
+      log.error({ err: (err as Error).message }, 'fill query failed');
+      return;
+    }
+    if (rows.length === 0) return;
+
+    for (const rt of rows) {
+      const fill = {
+        id: rt.id,
+        botId: rt.bot_id,
+        buyFillId: rt.buy_fill_id,
+        sellFillId: rt.sell_fill_id,
+        buyPrice: rt.buy_price,
+        sellPrice: rt.sell_price,
+        size: rt.size,
+        profit: rt.profit,
+        createdAt: rt.created_at
+      };
+      wsBus.publish('fills', 'fill', fill);
+      if (rt.bot_id) wsBus.publish(`bot:${rt.bot_id}`, 'fill', fill);
+      this.lastBroadcastRoundtripId = rt.id;
+    }
+    log.debug({ count: rows.length, lastId: this.lastBroadcastRoundtripId }, 'broadcast new fills');
   }
 }

@@ -39,7 +39,6 @@ data/*.db-*
 .smtp-key.tmp
 .fix-*.sh
 .dash-deploy.sh
-.caddy-*.sh
 .sol-*.sh
 .verify-*.sh
 .set-env-vars.sh
@@ -49,7 +48,6 @@ data/*.db-*
 .deploy-*.ps1
 .deploy-*.sh
 *.deploy-pw
-secrets/
 
 # TypeScript build artifacts that sometimes get pulled in alongside source
 **/src/**/*.js

@@ -10,11 +10,9 @@ import path from 'node:path';
 // - Dev proxy: /api/* and /ws → backend at localhost:3848 (override via env)
 //   This avoids CORS issues during development without touching the backend.
 export default defineConfig({
-  // The bot's express server mounts the SPA under /dashboard/. All asset
-  // URLs in index.html need to be prefixed accordingly so the browser
-  // resolves them against /dashboard/assets/* (not /assets/*).
-  // Override via VITE_BASE_PATH=/ for local dev or alternative deployments.
-  base: process.env.VITE_BASE_PATH ?? '/dashboard/',
+  // The public landing lives at / and the authenticated product starts at
+  // /dashboard. Assets therefore use root-relative URLs in every deployment.
+  base: process.env.VITE_BASE_PATH ?? '/',
   plugins: [react(), tailwindcss()],
   resolve: {
     alias: {

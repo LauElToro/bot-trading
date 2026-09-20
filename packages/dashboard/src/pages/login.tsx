@@ -1,31 +1,78 @@
 import { useCallback, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
+import { ArrowRight, Eye, EyeOff, LockKeyhole, Mail } from 'lucide-react';
 import { useAuth } from '@/lib/auth-context';
 import { ApiError } from '@/lib/api-types';
 import { GRVT_REFERRAL_URL } from '@/lib/brand';
-import { BrandMark } from '@/components/brand-mark';
-import { Button } from '@/components/primitives/button';
-import { Input } from '@/components/primitives/input';
 import { GoogleSignInButton, isGoogleSignInEnabled } from '@/components/google-sign-in';
-import { LanguageToggle, useLang, useT } from '@/i18n';
+import { useLang, useT } from '@/i18n';
+import {
+  AuthShell,
+  authButtonClass,
+  authInputClass,
+} from '@/components/auth/auth-shell';
+import { OtpStep } from '@/components/auth/otp-step';
+
+const COPY = {
+  es: {
+    kicker: 'ACCESO A TU CUENTA',
+    title: 'Volvé a Toro y seguí operando',
+    subtitle: 'Ingresá con tu email y contraseña. Después confirmaremos tu acceso por email.',
+    email: 'Email',
+    emailPlaceholder: 'tu@email.com',
+    password: 'Contraseña',
+    passwordPlaceholder: 'Tu contraseña',
+    submit: 'Continuar de forma segura',
+    pending: 'Validando…',
+    divider: 'o',
+    noAccount: '¿Todavía no tenés cuenta?',
+    create: 'Creá una',
+    referral: '¿Todavía no usás GRVT?',
+    referralLink: 'Abrí tu cuenta',
+    otpError: 'El código es incorrecto, venció o ya fue utilizado.',
+    resendError: 'No pudimos reenviar el código. Intentá nuevamente.',
+  },
+  en: {
+    kicker: 'ACCOUNT ACCESS',
+    title: 'Return to Toro and keep trading',
+    subtitle: 'Enter your email and password. We will then confirm your access by email.',
+    email: 'Email',
+    emailPlaceholder: 'you@email.com',
+    password: 'Password',
+    passwordPlaceholder: 'Your password',
+    submit: 'Continue securely',
+    pending: 'Checking…',
+    divider: 'or',
+    noAccount: 'Don’t have an account yet?',
+    create: 'Create one',
+    referral: 'Not using GRVT yet?',
+    referralLink: 'Open your account',
+    otpError: 'The code is incorrect, expired, or has already been used.',
+    resendError: 'We could not resend the code. Please try again.',
+  },
+} as const;
 
 export function LoginPage() {
-  const { login, loginWithGoogle } = useAuth();
+  const { login, loginWithGoogle, verifyOtp, resendOtp } = useAuth();
   const navigate = useNavigate();
   const t = useT();
   const { lang } = useLang();
+  const copy = COPY[lang];
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [pending, setPending] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+  const [challenge, setChallenge] = useState<{ id: string; emailHint: string } | null>(null);
+  const [otpError, setOtpError] = useState('');
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!email || !password) return;
     setPending(true);
     try {
-      await login(email, password);
-      navigate('/', { replace: true });
+      const result = await login(email, password, lang);
+      setChallenge({ id: result.challengeId, emailHint: result.emailHint });
     } catch (err) {
       toast.error((err as Error).message || t('auth.login.loginFailed'));
     } finally {
@@ -33,15 +80,38 @@ export function LoginPage() {
     }
   }
 
+  async function handleVerify(code: string) {
+    if (!challenge) return;
+    setPending(true);
+    setOtpError('');
+    try {
+      await verifyOtp(challenge.id, code, email);
+      navigate('/dashboard', { replace: true });
+    } catch {
+      setOtpError(copy.otpError);
+    } finally {
+      setPending(false);
+    }
+  }
+
+  async function handleResend() {
+    if (!challenge) return;
+    try {
+      await resendOtp(challenge.id, lang);
+    } catch {
+      toast.error(copy.resendError);
+    }
+  }
+
   const handleGoogle = useCallback(async (idToken: string) => {
     setPending(true);
     try {
       await loginWithGoogle(idToken);
-      navigate('/', { replace: true });
+      navigate('/dashboard', { replace: true });
     } catch (err) {
       if (err instanceof ApiError && err.status === 409) {
         toast.error(t('auth.login.googleNeedsSignup'));
-        navigate('/signup', { replace: true });
+        navigate('/dashboard/signup', { replace: true });
         return;
       }
       toast.error((err as Error).message || t('auth.common.googleFailed'));
@@ -51,86 +121,104 @@ export function LoginPage() {
   }, [loginWithGoogle, navigate, t]);
 
   return (
-    <div className="min-h-dvh flex items-center justify-center p-4 bg-bg-base">
-      <div className="w-full max-w-sm space-y-6">
-        <div className="flex justify-end">
-          <LanguageToggle />
-        </div>
-        <div className="text-center space-y-3">
-          <BrandMark className="justify-center" />
-          <p className="text-sm text-text-muted">{t('auth.login.subtitle')}</p>
-        </div>
+    <AuthShell mode="login">
+      {challenge ? (
+        <OtpStep
+          emailHint={challenge.emailHint}
+          pending={pending}
+          error={otpError}
+          onVerify={handleVerify}
+          onResend={handleResend}
+          onBack={() => {
+            setChallenge(null);
+            setOtpError('');
+          }}
+        />
+      ) : (
+        <div>
+          <p className="font-mono text-[10px] tracking-[.2em] text-[#9a711f]">{copy.kicker}</p>
+          <h1 className="mt-2 text-3xl font-bold tracking-[-.035em] text-[#211c15] sm:text-4xl">
+            {copy.title}
+          </h1>
+          <p className="mt-3 text-sm leading-6 text-[#756a5b]">{copy.subtitle}</p>
 
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <Input
-            label={t('auth.login.email')}
-            type="email"
-            autoComplete="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            disabled={pending}
-          />
-          <Input
-            label={t('auth.login.password')}
-            type="password"
-            autoComplete="current-password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            disabled={pending}
-          />
-          <div className="flex justify-end">
-            <Link
-              to="/forgot-password"
-              className="text-xs text-text-muted hover:text-primary hover:underline"
-            >
-              {t('auth.login.forgotPassword')}
-            </Link>
-          </div>
-          <Button
-            variant="primary"
-            type="submit"
-            disabled={pending || !email || !password}
-            className="w-full"
-          >
-            {pending ? t('auth.login.loggingIn') : t('auth.login.loginBtn')}
-          </Button>
-        </form>
-
-        {isGoogleSignInEnabled() && (
-          <div className="space-y-3">
-            <div className="flex items-center gap-3 text-2xs uppercase tracking-wider text-text-muted">
-              <span className="flex-1 h-px bg-border-subtle" />
-              {t('auth.common.or')}
-              <span className="flex-1 h-px bg-border-subtle" />
+          <form onSubmit={handleSubmit} className="mt-8 space-y-4">
+            <label className="block">
+              <span className="mb-2 block text-xs font-semibold text-[#453d33]">{copy.email}</span>
+              <span className="relative block">
+                <Mail className="absolute left-4 top-1/2 size-4 -translate-y-1/2 text-[#9a9185]" />
+                <input
+                  type="email"
+                  autoComplete="email"
+                  value={email}
+                  onChange={(event) => setEmail(event.target.value)}
+                  placeholder={copy.emailPlaceholder}
+                  disabled={pending}
+                  required
+                  className={`${authInputClass} pl-11`}
+                />
+              </span>
+            </label>
+            <label className="block">
+              <span className="mb-2 block text-xs font-semibold text-[#453d33]">{copy.password}</span>
+              <span className="relative block">
+                <LockKeyhole className="absolute left-4 top-1/2 size-4 -translate-y-1/2 text-[#9a9185]" />
+                <input
+                  type={showPassword ? 'text' : 'password'}
+                  autoComplete="current-password"
+                  value={password}
+                  onChange={(event) => setPassword(event.target.value)}
+                  placeholder={copy.passwordPlaceholder}
+                  disabled={pending}
+                  required
+                  className={`${authInputClass} px-11`}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((value) => !value)}
+                  aria-label={showPassword ? 'Hide password' : 'Show password'}
+                  className="absolute right-4 top-1/2 -translate-y-1/2 text-[#8f877c]"
+                >
+                  {showPassword ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+                </button>
+              </span>
+            </label>
+            <div className="flex justify-end">
+              <Link to="/dashboard/forgot-password" className="text-xs font-medium text-[#98701b] hover:underline">
+                {t('auth.login.forgotPassword')}
+              </Link>
             </div>
-            <GoogleSignInButton
-              onCredential={handleGoogle}
-              disabled={pending}
-              label="signin_with"
-              locale={lang}
-            />
-          </div>
-        )}
+            <button type="submit" disabled={pending || !email || !password} className={authButtonClass}>
+              {pending ? copy.pending : copy.submit}
+              {!pending && <ArrowRight className="size-4" />}
+            </button>
+          </form>
 
-        <p className="text-xs text-text-muted text-center">
-          {t('auth.login.noAccount')}{' '}
-          <Link to="/signup" className="text-primary hover:underline">
-            {t('auth.login.signUp')}
-          </Link>
-        </p>
+          {isGoogleSignInEnabled() && (
+            <div className="mt-5 space-y-4">
+              <div className="flex items-center gap-3 text-[10px] uppercase tracking-wider text-[#aaa297]">
+                <span className="h-px flex-1 bg-[#e1dcd3]" />
+                {copy.divider}
+                <span className="h-px flex-1 bg-[#e1dcd3]" />
+              </div>
+              <GoogleSignInButton onCredential={handleGoogle} disabled={pending} label="signin_with" locale={lang} />
+            </div>
+          )}
 
-        <p className="text-2xs text-text-muted text-center">
-          {t('auth.login.needGrvt')}{' '}
-          <a
-            href={GRVT_REFERRAL_URL}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-primary hover:underline"
-          >
-            {t('auth.login.grvtReferralCta')}
-          </a>
-        </p>
-      </div>
-    </div>
+          <p className="mt-5 text-center text-xs text-[#756a5b]">
+            {copy.noAccount}{' '}
+            <Link to="/dashboard/signup" className="font-semibold text-[#208a57] hover:underline">
+              {copy.create}
+            </Link>
+          </p>
+          <p className="mt-3 text-center text-[11px] text-[#91877a]">
+            {copy.referral}{' '}
+            <a href={GRVT_REFERRAL_URL} target="_blank" rel="noopener noreferrer" className="font-medium text-[#98701b] hover:underline">
+              {copy.referralLink}
+            </a>
+          </p>
+        </div>
+      )}
+    </AuthShell>
   );
 }

@@ -1,24 +1,79 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
+import { ArrowRight, Eye, EyeOff, LockKeyhole, Mail } from 'lucide-react';
 import { useAuth } from '@/lib/auth-context';
 import { api } from '@/lib/api-client';
 import { GRVT_REFERRAL_URL } from '@/lib/brand';
-import { BrandMark } from '@/components/brand-mark';
-import { Button } from '@/components/primitives/button';
-import { Input } from '@/components/primitives/input';
 import { GoogleSignInButton, isGoogleSignInEnabled } from '@/components/google-sign-in';
-import { useLang, LanguageToggle } from '@/i18n';
+import { useLang } from '@/i18n';
+import {
+  AuthShell,
+  authButtonClass,
+  authInputClass,
+} from '@/components/auth/auth-shell';
+import { OtpStep } from '@/components/auth/otp-step';
+
+const COPY = {
+  es: {
+    kicker: 'REGISTRO SEGURO',
+    title: 'Creá tu cuenta y diseñá tu primera grilla',
+    subtitle: 'Registrate en menos de un minuto. No se colocan órdenes hasta que vos las confirmes.',
+    email: 'Email',
+    emailPlaceholder: 'tu@email.com',
+    password: 'Contraseña',
+    passwordPlaceholder: 'Mínimo 8 caracteres',
+    confirm: 'Confirmar contraseña',
+    terms: 'Ver términos y condiciones',
+    accept: 'Leí y acepto los términos y condiciones',
+    submit: 'Crear mi cuenta',
+    pending: 'Creando…',
+    divider: 'o',
+    account: '¿Ya tenés cuenta?',
+    login: 'Iniciá sesión',
+    referral: '¿Todavía no tenés GRVT?',
+    referralLink: 'Creá tu cuenta con beneficios',
+    otpError: 'El código es incorrecto, venció o ya fue utilizado.',
+    resendError: 'No pudimos reenviar el código. Intentá nuevamente.',
+    created: 'Email verificado. Tu cuenta ya está lista.',
+  },
+  en: {
+    kicker: 'SECURE REGISTRATION',
+    title: 'Create your account and design your first grid',
+    subtitle: 'Sign up in under a minute. No orders are placed until you confirm them.',
+    email: 'Email',
+    emailPlaceholder: 'you@email.com',
+    password: 'Password',
+    passwordPlaceholder: 'At least 8 characters',
+    confirm: 'Confirm password',
+    terms: 'View terms and conditions',
+    accept: 'I have read and accept the terms and conditions',
+    submit: 'Create my account',
+    pending: 'Creating…',
+    divider: 'or',
+    account: 'Already have an account?',
+    login: 'Sign in',
+    referral: 'Don’t have GRVT yet?',
+    referralLink: 'Create your account with benefits',
+    otpError: 'The code is incorrect, expired, or has already been used.',
+    resendError: 'We could not resend the code. Please try again.',
+    created: 'Email verified. Your account is ready.',
+  },
+} as const;
 
 export function SignupPage() {
-  const { signup, loginWithGoogle } = useAuth();
+  const { signup, loginWithGoogle, verifyOtp, resendOtp } = useAuth();
   const navigate = useNavigate();
   const { lang, t } = useLang();
+  const copy = COPY[lang];
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
   const [accepted, setAccepted] = useState(false);
   const [pending, setPending] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+  const [challenge, setChallenge] = useState<{ id: string; emailHint: string } | null>(null);
+  const [otpError, setOtpError] = useState('');
   // TOS texts are fetched from the server so the dashboard and the
   // hash audit log stay in lockstep without manual duplication. We
   // keep both languages in memory so toggling is instant.
@@ -64,13 +119,36 @@ export function SignupPage() {
     if (!canSubmit) return;
     setPending(true);
     try {
-      await signup(email, password, lang);
-      toast.success(t('auth.signup.accountCreated'));
-      navigate('/onboarding/grvt', { replace: true });
+      const result = await signup(email, password, lang);
+      setChallenge({ id: result.challengeId, emailHint: result.emailHint });
     } catch (err) {
       toast.error((err as Error).message || t('auth.signup.signupFailed'));
     } finally {
       setPending(false);
+    }
+  }
+
+  async function handleVerify(code: string) {
+    if (!challenge) return;
+    setPending(true);
+    setOtpError('');
+    try {
+      await verifyOtp(challenge.id, code, email);
+      toast.success(copy.created);
+      navigate('/dashboard/onboarding/grvt', { replace: true });
+    } catch {
+      setOtpError(copy.otpError);
+    } finally {
+      setPending(false);
+    }
+  }
+
+  async function handleResend() {
+    if (!challenge) return;
+    try {
+      await resendOtp(challenge.id, lang);
+    } catch {
+      toast.error(copy.resendError);
     }
   }
 
@@ -83,7 +161,7 @@ export function SignupPage() {
     try {
       await loginWithGoogle(idToken, { acceptedTerms: true, tosLang: lang });
       toast.success(t('auth.signup.accountCreated'));
-      navigate('/onboarding/grvt', { replace: true });
+      navigate('/dashboard/onboarding/grvt', { replace: true });
     } catch (err) {
       toast.error((err as Error).message || t('auth.common.googleFailed'));
     } finally {
@@ -94,135 +172,93 @@ export function SignupPage() {
   const termsBody = tosTexts ? tosTexts[lang] : '';
 
   return (
-    <div className="min-h-dvh flex items-center justify-center p-4 bg-bg-base">
-      <div className="w-full max-w-md space-y-6">
-        <div className="flex justify-end">
-          <LanguageToggle />
-        </div>
-        <div className="text-center space-y-3">
-          <BrandMark className="justify-center" />
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight text-text-primary">
-              {t('auth.signup.title')}
-            </h1>
-            <p className="text-sm text-text-muted mt-1">
-              {t('auth.signup.subtitle')}
-            </p>
-          </div>
-        </div>
+    <AuthShell mode="signup">
+      {challenge ? (
+        <OtpStep
+          emailHint={challenge.emailHint}
+          pending={pending}
+          error={otpError}
+          onVerify={handleVerify}
+          onResend={handleResend}
+          onBack={() => {
+            setChallenge(null);
+            setOtpError('');
+          }}
+        />
+      ) : (
+        <div>
+          <p className="font-mono text-[10px] tracking-[.2em] text-[#9a711f]">{copy.kicker}</p>
+          <h1 className="mt-2 text-3xl font-bold tracking-[-.035em] text-[#211c15] sm:text-4xl">{copy.title}</h1>
+          <p className="mt-3 text-sm leading-6 text-[#756a5b]">{copy.subtitle}</p>
 
-        <div className="rounded-md border border-primary/40 bg-primary-soft p-4 space-y-2">
-          <div className="text-xs font-medium text-text-primary">
-            {t('auth.signup.grvtReferralTitle')}
-          </div>
-          <p className="text-xs text-text-secondary leading-relaxed">
-            {t('auth.signup.grvtReferralBody')}
-          </p>
-          <a
-            href={GRVT_REFERRAL_URL}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-block text-xs font-medium text-primary hover:underline"
-          >
-            {t('auth.signup.grvtReferralLink')}
-          </a>
-          <p className="text-2xs text-text-muted pt-1 border-t border-border-subtle">
-            {t('auth.signup.grvtReferralAfter')}
-          </p>
-        </div>
-
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <Input
-            label={t('auth.signup.email')}
-            type="email"
-            autoComplete="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            disabled={pending}
-          />
-          <Input
-            label={t('auth.signup.password')}
-            type="password"
-            autoComplete="new-password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            disabled={pending}
-          />
-          <Input
-            label={t('auth.signup.confirmPassword')}
-            type="password"
-            autoComplete="new-password"
-            value={confirm}
-            onChange={(e) => setConfirm(e.target.value)}
-            error={passwordError}
-            disabled={pending}
-          />
-
-          <div className="rounded-md border border-border-subtle bg-bg-surface p-3 space-y-2">
-            <div className="text-2xs uppercase tracking-wider text-text-muted">
-              {t('auth.signup.termsTitle')}
-            </div>
-            {tosLoadError ? (
-              <div className="text-xs text-danger">
-                {t('common.networkError')}
-              </div>
-            ) : !tosTexts ? (
-              <div className="text-xs text-text-muted animate-pulse">
-                {t('common.loading')}
-              </div>
-            ) : (
-              <pre className="text-2xs text-text-secondary whitespace-pre-wrap font-sans leading-relaxed max-h-40 overflow-y-auto">
-                {termsBody}
-              </pre>
-            )}
-            <label className="flex items-start gap-2 text-xs text-text-secondary cursor-pointer pt-1 border-t border-border-subtle">
-              <input
-                type="checkbox"
-                checked={accepted}
-                onChange={(e) => setAccepted(e.target.checked)}
-                className="mt-0.5 size-4 accent-primary"
-                disabled={pending || !tosTexts}
-              />
-              <span>{t('auth.signup.acceptTerms')}</span>
+          <form onSubmit={handleSubmit} className="mt-7 space-y-3.5">
+            <label className="block">
+              <span className="mb-1.5 block text-xs font-semibold text-[#453d33]">{copy.email}</span>
+              <span className="relative block">
+                <Mail className="absolute left-4 top-1/2 size-4 -translate-y-1/2 text-[#9a9185]" />
+                <input type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder={copy.emailPlaceholder} disabled={pending} required className={`${authInputClass} pl-11`} />
+              </span>
             </label>
-          </div>
-
-          <Button
-            variant="primary"
-            type="submit"
-            disabled={!canSubmit}
-            className="w-full"
-          >
-            {pending ? t('auth.signup.creating') : t('auth.signup.createBtn')}
-          </Button>
-        </form>
-
-        {isGoogleSignInEnabled() && (
-          <div className="space-y-3">
-            <div className="flex items-center gap-3 text-2xs uppercase tracking-wider text-text-muted">
-              <span className="flex-1 h-px bg-border-subtle" />
-              {t('auth.common.or')}
-              <span className="flex-1 h-px bg-border-subtle" />
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label className="block">
+                <span className="mb-1.5 block text-xs font-semibold text-[#453d33]">{copy.password}</span>
+                <span className="relative block">
+                  <LockKeyhole className="absolute left-4 top-1/2 size-4 -translate-y-1/2 text-[#9a9185]" />
+                  <input type={showPassword ? 'text' : 'password'} autoComplete="new-password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder={copy.passwordPlaceholder} disabled={pending} required className={`${authInputClass} pl-11 pr-10`} />
+                  <button type="button" onClick={() => setShowPassword((value) => !value)} className="absolute right-3 top-1/2 -translate-y-1/2 text-[#8f877c]" aria-label={showPassword ? 'Hide password' : 'Show password'}>
+                    {showPassword ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+                  </button>
+                </span>
+              </label>
+              <label className="block">
+                <span className="mb-1.5 block text-xs font-semibold text-[#453d33]">{copy.confirm}</span>
+                <input type={showPassword ? 'text' : 'password'} autoComplete="new-password" value={confirm} onChange={(event) => setConfirm(event.target.value)} disabled={pending} required className={authInputClass} />
+              </label>
             </div>
-            <GoogleSignInButton
-              onCredential={handleGoogle}
-              disabled={pending || !accepted || !tosTexts}
-              label="signup_with"
-              locale={lang}
-            />
-            <p className="text-2xs text-text-muted text-center">
-              {t('auth.signup.googleHint')}
-            </p>
-          </div>
-        )}
+            {passwordError && <p className="text-xs text-[#b13b2d]">{passwordError}</p>}
 
-        <p className="text-xs text-text-muted text-center">
-          {t('auth.signup.haveAccount')}{' '}
-          <Link to="/login" className="text-primary hover:underline">
-            {t('auth.signup.signIn')}
-          </Link>
-        </p>
-      </div>
-    </div>
+            <details className="rounded-lg border border-[#ded8cf] bg-[#faf8f3]">
+              <summary className="cursor-pointer px-4 py-3 text-xs font-semibold text-[#6d6254]">{copy.terms}</summary>
+              <div className="border-t border-[#e4ded5] px-4 py-3">
+                {tosLoadError ? (
+                  <p className="text-xs text-[#b13b2d]">{t('common.networkError')}</p>
+                ) : !tosTexts ? (
+                  <p className="animate-pulse text-xs text-[#8b8174]">{t('common.loading')}</p>
+                ) : (
+                  <pre className="max-h-36 overflow-y-auto whitespace-pre-wrap font-sans text-[10px] leading-relaxed text-[#756a5b]">{termsBody}</pre>
+                )}
+              </div>
+            </details>
+            <label className="flex cursor-pointer items-start gap-2.5 text-xs text-[#5f5549]">
+              <input type="checkbox" checked={accepted} onChange={(event) => setAccepted(event.target.checked)} disabled={pending || !tosTexts} className="mt-0.5 size-4 accent-[#c79220]" />
+              <span>{copy.accept}</span>
+            </label>
+
+            <button type="submit" disabled={!canSubmit} className={authButtonClass}>
+              {pending ? copy.pending : copy.submit}
+              {!pending && <ArrowRight className="size-4" />}
+            </button>
+          </form>
+
+          {isGoogleSignInEnabled() && (
+            <div className="mt-4 space-y-3">
+              <div className="flex items-center gap-3 text-[10px] uppercase tracking-wider text-[#aaa297]">
+                <span className="h-px flex-1 bg-[#e1dcd3]" />{copy.divider}<span className="h-px flex-1 bg-[#e1dcd3]" />
+              </div>
+              <GoogleSignInButton onCredential={handleGoogle} disabled={pending || !accepted || !tosTexts} label="signup_with" locale={lang} />
+            </div>
+          )}
+
+          <p className="mt-4 text-center text-xs text-[#756a5b]">
+            {copy.account}{' '}
+            <Link to="/dashboard/login" className="font-semibold text-[#208a57] hover:underline">{copy.login}</Link>
+          </p>
+          <p className="mt-2 text-center text-[11px] text-[#91877a]">
+            {copy.referral}{' '}
+            <a href={GRVT_REFERRAL_URL} target="_blank" rel="noopener noreferrer" className="font-medium text-[#98701b] hover:underline">{copy.referralLink}</a>
+          </p>
+        </div>
+      )}
+    </AuthShell>
   );
 }

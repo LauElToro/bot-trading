@@ -41,7 +41,7 @@ export function SettingsPage() {
             variant="secondary"
             onClick={() => {
               logout();
-              navigate('/login', { replace: true });
+              navigate('/dashboard/login', { replace: true });
             }}
           >
             {t('settings.account.logoutBtn')}
@@ -66,7 +66,7 @@ export function SettingsPage() {
             </p>
             <Button
               variant="secondary"
-              onClick={() => navigate('/onboarding/grvt')}
+              onClick={() => navigate('/dashboard/onboarding/grvt')}
             >
               {t('settings.grvtUpdateBtn')}
             </Button>
@@ -84,7 +84,7 @@ export function SettingsPage() {
             </p>
             <Button
               variant="primary"
-              onClick={() => navigate('/onboarding/grvt')}
+              onClick={() => navigate('/dashboard/onboarding/grvt')}
             >
               {t('settings.grvtConnectBtn')}
             </Button>

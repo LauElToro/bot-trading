@@ -67,5 +67,12 @@ curl -s -H "X-Api-Key: YOUR_KEY" http://localhost:3848/api/v2/bots | python3 -m 
 Always backup the DB before deploying schema changes:
 
 ```bash
-sqlite3 /opt/grvt-grid-bot/data/grid_bot.db ".backup /var/backups/grvt-grid-bot/pre-deploy-$(date +%s).db"
+export DATABASE_URL='postgresql://...'
+pg_dump --format=custom --no-owner --no-acl \
+  --file="/var/backups/grvt-grid-bot/pre-deploy-$(date +%s).dump" \
+  "$DATABASE_URL"
 ```
+
+Restore into a separate PostgreSQL database first and verify it before
+changing `DATABASE_URL`. During the SQLite-to-PostgreSQL cutover, follow
+[`MIGRATION-POSTGRES.md`](MIGRATION-POSTGRES.md).

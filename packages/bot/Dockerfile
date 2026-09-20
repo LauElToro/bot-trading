@@ -1,7 +1,7 @@
 # Multi-stage build for the Toro bot.
 #
-# Stage 1 (bot-builder): build the bot TypeScript + compile sqlite3 native
-# bindings against a glibc base.
+# Stage 1 (bot-builder): build the bot TypeScript. SQLite exists only as a
+# development dependency for the one-shot import tool and is pruned.
 # Stage 2 (dashboard-builder): build the React SPA into static assets.
 # Stage 3 (runtime): slim runtime image. Copies the bot dist + node_modules
 # from stage 1 and the dashboard dist from stage 2, drops everything else.
@@ -25,13 +25,13 @@ COPY package.json package-lock.json ./
 COPY packages/bot/package.json packages/bot/
 COPY packages/bot/tsconfig.json packages/bot/
 
-RUN npm ci --workspace=@grvt-grid/bot --include-workspace-root \
-    && npm rebuild sqlite3 --build-from-source
+RUN npm ci --workspace=@grvt-grid/bot --include-workspace-root
 
 # Now copy the source and build
 COPY packages/bot/src packages/bot/src
 COPY packages/bot/tests packages/bot/tests
 RUN npm run build --workspace=@grvt-grid/bot
+RUN npm prune --omit=dev
 
 # ── Stage 2: dashboard builder ────────────────────────────────────────────
 # Builds the SPA into /build/packages/dashboard/dist. The dashboard uses
@@ -41,7 +41,7 @@ FROM node:22-bookworm-slim AS dashboard-builder
 
 WORKDIR /build
 
-ARG VITE_BASE_PATH=/dashboard/
+ARG VITE_BASE_PATH=/
 ARG VITE_API_BASE_URL=
 
 ENV VITE_BASE_PATH=${VITE_BASE_PATH} \
@@ -69,11 +69,13 @@ RUN groupadd -g 10000 grvtbot && \
     useradd -u 10000 -g grvtbot -m -s /usr/sbin/nologin grvtbot
 
 WORKDIR /app
+ENV DB_MIGRATIONS_DIR=/app/migrations
 
 # Copy compiled output + production node_modules from bot-builder.
 # npm workspaces hoists everything to the root node_modules (no nested
 # packages/bot/node_modules), so a single copy is enough.
 COPY --from=bot-builder --chown=grvtbot:grvtbot /build/packages/bot/dist ./dist
+COPY --from=bot-builder --chown=grvtbot:grvtbot /build/packages/bot/src/database/migrations ./migrations
 COPY --from=bot-builder --chown=grvtbot:grvtbot /build/node_modules ./node_modules
 COPY --chown=grvtbot:grvtbot packages/bot/package.json ./package.json
 
@@ -81,10 +83,6 @@ COPY --chown=grvtbot:grvtbot packages/bot/package.json ./package.json
 # with a bind mount to /app/dashboard-dist if needed (e.g. to test a UI
 # build without rebuilding the whole image).
 COPY --from=dashboard-builder --chown=grvtbot:grvtbot /build/packages/dashboard/dist ./dashboard-dist
-
-# Data dir is a bind-mount target for the SQLite db + WAL files
-RUN mkdir -p /app/data && chown grvtbot:grvtbot /app/data
-VOLUME /app/data
 
 USER grvtbot
 EXPOSE 3848
