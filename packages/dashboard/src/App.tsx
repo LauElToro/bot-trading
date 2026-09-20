@@ -17,6 +17,7 @@ import { ForgotPasswordPage } from './pages/forgot-password';
 import { ResetPasswordPage } from './pages/reset-password';
 import { GrvtOnboardingPage } from './pages/onboarding/grvt';
 import { LandingPage } from './pages/landing';
+import { TermsPage } from './pages/terms';
 
 // Bot Detail owns the heaviest dependencies (lightweight-charts + recharts).
 // Lazy-load it so the Overview page doesn't pay the cost on first paint.
@@ -114,6 +115,7 @@ export default function App() {
           <Routes>
             {/* Public product page — the default route is intentionally indexable. */}
             <Route path="/" element={<LandingPage />} />
+            <Route path="terms" element={<TermsPage />} />
 
             {/* Public auth routes — no AppShell, no ProtectedRoute */}
             <Route path="dashboard/login" element={<LoginPage />} />

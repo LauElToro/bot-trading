@@ -128,6 +128,7 @@ const COPY = {
       'Trading de futuros perpetuos implica riesgo de pérdida y liquidación. Toro es software de automatización, no asesoramiento financiero.',
     updated: 'Última actualización: 20 de septiembre de 2026',
     footerTag: 'Grid trading con control humano.',
+    terms: 'Términos y condiciones',
   },
   en: {
     metaTitle: 'Toro Grid Bot for GRVT | Automated Trading',
@@ -238,6 +239,7 @@ const COPY = {
       'Perpetual futures trading involves risk of loss and liquidation. Toro is automation software, not financial advice.',
     updated: 'Last updated: September 20, 2026',
     footerTag: 'Grid trading with human control.',
+    terms: 'Terms and conditions',
   },
 } as const;
 
@@ -672,6 +674,9 @@ export function LandingPage() {
           <div className="flex flex-col gap-7 border-b border-border-subtle pb-8 sm:flex-row sm:items-center sm:justify-between">
             <BrandMark compact />
             <p className="text-xs text-text-muted">{copy.footerTag}</p>
+            <Link to="/terms" className="text-xs text-text-muted underline-offset-4 hover:text-primary hover:underline">
+              {copy.terms}
+            </Link>
             <span className="text-xs text-text-muted">© 2026 Toro</span>
           </div>
           <div className="mt-7 flex flex-col gap-3 text-[10px] leading-5 text-text-disabled sm:flex-row sm:items-end sm:justify-between">

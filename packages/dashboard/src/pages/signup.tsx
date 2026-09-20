@@ -28,6 +28,7 @@ const COPY = {
     passwordPlaceholder: 'Mínimo 8 caracteres',
     confirm: 'Confirmar contraseña',
     terms: 'Ver términos y condiciones',
+    fullTerms: 'Abrir documento completo',
     accept: 'Leí y acepto los términos y condiciones',
     submit: 'Crear mi cuenta',
     pending: 'Creando…',
@@ -56,6 +57,7 @@ const COPY = {
     passwordPlaceholder: 'At least 8 characters',
     confirm: 'Confirm password',
     terms: 'View terms and conditions',
+    fullTerms: 'Open full document',
     accept: 'I have read and accept the terms and conditions',
     submit: 'Create my account',
     pending: 'Creating…',
@@ -306,6 +308,14 @@ export function SignupPage() {
                 ) : (
                   <pre className="max-h-36 overflow-y-auto whitespace-pre-wrap font-sans text-[10px] leading-relaxed text-[#756a5b]">{termsBody}</pre>
                 )}
+                <Link
+                  to="/terms"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="mt-3 inline-flex text-[11px] font-semibold text-[#8a6414] underline underline-offset-2"
+                >
+                  {copy.fullTerms}
+                </Link>
               </div>
             </details>
             <label className="flex cursor-pointer items-start gap-2.5 text-xs text-[#5f5549]">

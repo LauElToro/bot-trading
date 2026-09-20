@@ -407,15 +407,15 @@ export function createV2Router(deps: V2RouterDeps): Router {
 
   // Hard-coded TOS shown at signup. Versioned so we can audit which
   // version each user accepted. When you change the text, bump the
-  // version string AND update the corresponding terms_text in the
-  // dashboard signup form so the hash matches what was shown.
+  // version string. The dashboard fetches this exact text from the
+  // public terms endpoint so the acceptance hash matches what was shown.
   //
   // Bilingual: the dashboard offers an EN/ES toggle. The selected
   // language is sent as `terms_lang` in the signup body and stored as
   // part of `terms_version` (e.g. "2026-05-26-v3-es") so audit logs
   // record exactly which translation the user agreed to. Both
   // translations are legally equivalent for the operator's purposes.
-  const SIGNUP_TOS_VERSION = '2026-09-20-v6';
+  const SIGNUP_TOS_VERSION = '2026-09-20-v7';
   const SIGNUP_TOS_TEXT_EN = `Terms of Use — please read carefully before creating an account.
 
 1. WHAT THIS SERVICE IS
@@ -424,17 +424,32 @@ This is a grid trading platform for the GRVT perpetual futures exchange. By sign
 2. WHAT THIS SERVICE IS NOT
 The operator is not a broker, custodian, financial advisor, fiduciary, exchange, or registered investment professional. No part of this service constitutes investment, legal, tax, or financial advice. The operator never holds your funds — your funds stay on your GRVT account at all times.
 
+2A. NO DEPOSITS, CUSTODY, OR MONEY TRANSFERS TO TORO
+Toro does not require, request, receive, safeguard, administer, or custody money, cryptocurrency, collateral, or any other asset from you. You must never send funds to Toro, the operator, an employee, a contributor, or any address presented as belonging to Toro. All capital remains deposited directly with GRVT and is subject exclusively to GRVT's custody, solvency, security, withdrawal, settlement, and account rules. Toro is only a software interface that sends trading instructions to GRVT. If anyone asks you to transfer funds to activate Toro, treat the request as fraudulent and contact the operator through an official channel.
+
 3. YOUR RESPONSIBILITY
 You alone are responsible for: (a) every trade the bot executes under your account, (b) the configuration you choose (price range, leverage, grid count, investment size, safeguards), (c) the security of your GRVT account and API credentials, (d) any tax reporting on profits or losses, and (e) verifying that automated trading is legal in your jurisdiction.
 
+3A. EXPRESS AUTHORIZATION TO TRADE; NO RESPONSIBILITY FOR TRANSACTIONS
+By starting a bot, you expressly instruct and authorize the software to submit, replace, and cancel grid-trading orders on your GRVT sub-account according to the parameters you selected. GRVT — not Toro — receives, validates, matches, rejects, settles, and records every order and transaction. You remain the sole principal to every transaction. The operator does not approve individual trades, determine whether a trade is suitable, supervise your account, or assume responsibility for order execution, fills, prices, slippage, fees, funding, liquidation, rejected orders, partial fills, duplicated instructions, stale information, or any other transaction outcome.
+
+3B. API KEY PERMISSIONS — WITHDRAWAL AND TRANSFER MUST BE DISABLED
+You must create a dedicated GRVT API key with only the minimum permissions required for reading account data and trading. DO NOT enable Withdraw, Transfer, or any equivalent fund-movement permission. Toro's grid bot is designed solely for account reads and grid trading; it has no product feature that requests withdrawals or transfers and it does not intentionally use such permissions even if you provide a broader key. A key with unnecessary permissions materially increases the consequences of credential theft, server compromise, exchange changes, or human error. If your key currently has Withdraw or Transfer enabled, you must revoke it and create a trade-only key before connecting it. You accept all risk arising from granting permissions broader than requested.
+
 4. TRADING RISK — YOU CAN LOSE EVERYTHING
 Leveraged perpetual futures trading is extremely risky. You can lose up to 100% of the capital you allocate, and on leverage you can lose more than your initial position via liquidation, funding payments, or sudden market moves. The bot does not eliminate this risk — it automates execution of a strategy you choose. No profit is guaranteed, expected, or implied. Past performance of any sample, backtest, or other user's bot is not a predictor of your results.
+
+4A. SPECIFIC RISKS YOU ACCEPT
+Without limitation, you accept the risks of leverage and liquidation; one-directional markets in which a grid accumulates a losing position; gaps and extreme volatility; insufficient margin; negative or changing funding; maker/taker fees and rebates; slippage; minimum-order and precision rules; stale, delayed, incorrect, or missing market data; API latency, rate limits, outages, authentication failures, schema changes, and rejected requests; partial, duplicate, out-of-order, or missed fills; synchronization failures between Toro and GRVT; automatic range shifts, compounding, stop-loss, take-profit, and safeguard behavior; browser, server, database, network, DNS, cloud, dependency, or power failures; compromised credentials; smart-contract, oracle, blockchain, custody, and counterparty risk; regulatory or tax changes; and force majeure. Any safeguard may trigger late, fail to trigger, or behave differently under fast markets. A backtest is a simplified historical simulation and cannot reproduce liquidity, latency, slippage, funding, outages, or future conditions.
 
 5. SOFTWARE PROVIDED "AS IS"
 The software is provided "as is" and "as available", without warranty of any kind — express, implied, statutory, or otherwise — including any warranty of merchantability, fitness for a particular purpose, accuracy, completeness, non-infringement, or uninterrupted operation. Bugs, mis-configurations, edge cases, race conditions, dependency vulnerabilities, and undocumented behavior may exist and may cause partial or total loss of funds.
 
 6. NO SERVICE LEVEL — DOWNTIME IS EXPECTED
 The operator makes no uptime commitment. The service may be paused, degraded, or shut down at any time, with or without notice, for maintenance, cost reasons, legal reasons, exchange outages, infrastructure failure, or no reason at all. During downtime your bots may stop trading, miss fills, fail to react to price moves, or leave open positions un-managed — any of which may cause loss.
+
+6A. NO DUTY TO MONITOR, INTERVENE, OR RESCUE
+The operator has no duty to continuously monitor your bots, positions, margin, liquidation price, exchange status, API connectivity, or account security; to contact you before or after an adverse event; to manually close positions; to recover losses; or to keep the service available. You must independently monitor your GRVT account, maintain sufficient margin, keep direct access to GRVT, and be prepared to cancel orders, close positions, or revoke API keys without relying on Toro.
 
 7. THIRD-PARTY DEPENDENCIES
 This service depends on: GRVT (exchange, API, matching engine, custody), the underlying blockchain network, internet infrastructure, the cloud provider hosting this server, the operating system, runtime libraries, and email delivery providers. The operator has no control over and accepts no responsibility for any failure, outage, change in terms, downtime, hack, exploit, slippage, or malicious behavior of any of these third parties. Risks include but are not limited to: GRVT outages, GRVT API rate limits or changes, exchange insolvency, smart contract bugs, network congestion, oracle failure, and DNS or TLS provider compromise.
@@ -448,11 +463,17 @@ In the event of a server compromise, data breach, credential theft, fund loss, o
 10. LIMITATION OF LIABILITY
 To the maximum extent permitted by applicable law, in no event will the operator, contributors, or any affiliated party be liable to you or any third party for any claim, loss, damage, cost, or expense of any kind arising out of or related to your use of this service. This limitation applies regardless of the legal theory of liability (contract, tort, negligence, strict liability, or otherwise), regardless of whether the operator was advised of the possibility of such loss, and even if a remedy is found to have failed of its essential purpose. If any portion of this limitation is held unenforceable, the operator's total aggregate liability to you is capped at USD 1 (one US dollar).
 
+10A. RELEASE, WAIVER OF CLAIMS, AND COVENANT NOT TO SUE
+To the maximum extent permitted by applicable law, you knowingly and voluntarily release and forever discharge the operator, owners, employees, contractors, contributors, affiliates, and infrastructure providers from claims arising from or related to trading losses, liquidation, fees, funding, order execution, downtime, bugs, data loss, security incidents, unauthorized access, exchange conduct, or use or inability to use Toro. To that same extent, you waive the right to bring, join, finance, or maintain a lawsuit, collective action, class action, arbitration claim, or other proceeding seeking compensation for those events, and covenant not to sue the released parties. Nothing in these terms excludes liability that applicable law does not permit to be excluded; any non-waivable statutory right remains limited to the minimum remedy required by law.
+
 11. INDEMNIFICATION
 You agree to indemnify, defend, and hold harmless the operator and all contributors from any claim, demand, loss, liability, cost, or expense (including reasonable attorney fees) brought by any third party arising out of your use of the service, your violation of these terms, your violation of any law, or your infringement of any third party's rights.
 
 12. NO REVERSAL, NO REFUND
 There is no chargeback, refund, or rollback mechanism. Trades executed by the bot are final and settled on GRVT. The operator cannot reverse a trade, unwind a liquidation, recover stolen funds, or restore a lost API key.
+
+12A. FREE ACCESS AND REFERRAL DISCLOSURE
+Toro does not charge a subscription or require a payment or deposit for access at this time. Access may require that your GRVT account was created with referral code HCAQ5ES. GRVT may pay the operator referral rewards under GRVT's own program without deducting a separate Toro fee from your account. GRVT alone determines attribution, eligibility, calculation, payment, modification, and cancellation of referral rewards. This commercial relationship does not create a fiduciary duty, guarantee service availability, or make the operator responsible for your transactions.
 
 13. CHANGES TO THESE TERMS
 The operator may update these terms at any time. Continued use after an update constitutes acceptance of the new terms. Material changes will be surfaced on next login.
@@ -461,7 +482,7 @@ The operator may update these terms at any time. Continued use after an update c
 The operator may suspend or terminate your account at any time, with or without cause, with or without notice. You may stop using the service and revoke your GRVT API keys at any time.
 
 15. ACCEPTANCE
-By clicking "I have read and accept the terms above" and creating an account, you confirm that you have read, understood, and agree to be bound by every clause above, that you are at least 18 years old, that you are using your own funds, that your GRVT account was created with the required HCAQ5ES referral, and that you accept all risk of loss.`;
+By clicking "I have read and accept the terms above" and creating an account, you confirm that you have read, understood, and agree to be bound by every clause above; that you are at least 18 years old and legally able to enter this agreement; that you are using only funds you own and can afford to lose completely; that nobody promised you profits or asked you to deposit money with Toro; that your GRVT account was created with the required HCAQ5ES referral; that your API key does not grant Withdraw or Transfer permission; and that you knowingly accept sole responsibility for every trading and investment risk described above.`;
 
   const SIGNUP_TOS_TEXT_ES = `Términos de Uso — leé con atención antes de crear una cuenta.
 
@@ -471,17 +492,32 @@ Esto es una plataforma de grid trading para la exchange de futuros perpetuos GRV
 2. QUÉ NO ES ESTE SERVICIO
 El operador no es un broker, custodio, asesor financiero, fiduciario, exchange ni profesional registrado en inversiones. Ninguna parte de este servicio constituye asesoramiento de inversión, legal, impositivo o financiero. El operador nunca tiene tus fondos — tus fondos quedan siempre en tu cuenta de GRVT.
 
+2A. TORO NO RECIBE DEPÓSITOS, NO CUSTODIA Y NO TRANSFIERE DINERO
+Toro no te exige, solicita, recibe, resguarda, administra ni custodia dinero, criptomonedas, colateral ni ningún otro activo. Nunca debés enviar fondos a Toro, al operador, a empleados, contribuidores ni a una dirección presentada como perteneciente a Toro. Todo el capital permanece depositado directamente en GRVT y queda sujeto exclusivamente a las reglas de custodia, solvencia, seguridad, retiro, liquidación y cuenta de GRVT. Toro es únicamente una interfaz de software que envía instrucciones de trading a GRVT. Si alguien te pide transferir fondos para activar Toro, considerá la solicitud fraudulenta y contactá al operador por un canal oficial.
+
 3. TU RESPONSABILIDAD
 Vos sos el único responsable por: (a) cada trade que el bot ejecute en tu cuenta, (b) la configuración que elijas (rango de precios, apalancamiento, cantidad de niveles, tamaño de inversión, safeguards), (c) la seguridad de tu cuenta de GRVT y de tus credenciales API, (d) cualquier reporte impositivo sobre ganancias o pérdidas, y (e) verificar que el trading automatizado sea legal en tu jurisdicción.
 
+3A. AUTORIZACIÓN EXPRESA PARA OPERAR; SIN RESPONSABILIDAD POR TRANSACCIONES
+Al iniciar un bot, instruís y autorizás expresamente al software a enviar, reemplazar y cancelar órdenes de grid trading en tu subcuenta GRVT conforme a los parámetros que seleccionaste. GRVT — no Toro — recibe, valida, cruza, rechaza, liquida y registra cada orden y transacción. Vos sos el único principal de cada transacción. El operador no aprueba trades individuales, no determina si un trade es adecuado para vos, no supervisa tu cuenta y no asume responsabilidad por ejecución, fills, precios, slippage, fees, funding, liquidaciones, órdenes rechazadas, fills parciales, instrucciones duplicadas, información desactualizada ni ningún otro resultado transaccional.
+
+3B. PERMISOS DE LA API KEY — WITHDRAW Y TRANSFER DEBEN ESTAR DESACTIVADOS
+Debés crear una API key dedicada de GRVT con únicamente los permisos mínimos necesarios para leer datos de cuenta y operar. NO habilites Withdraw, Transfer ni ningún permiso equivalente para mover fondos. El bot grid de Toro está diseñado exclusivamente para lecturas de cuenta y grid trading; no tiene una función de producto que solicite retiros o transferencias y no utiliza intencionalmente esos permisos aunque entregues una clave más amplia. Una clave con permisos innecesarios aumenta sustancialmente las consecuencias de un robo de credenciales, compromiso del servidor, cambio de la exchange o error humano. Si tu clave actual permite Withdraw o Transfer, debés revocarla y crear una clave solo con permiso Trade antes de conectarla. Aceptás todo riesgo derivado de otorgar permisos más amplios que los solicitados.
+
 4. RIESGO DE TRADING — PODÉS PERDER TODO
 El trading de futuros perpetuos con apalancamiento es extremadamente riesgoso. Podés perder hasta el 100% del capital que asignes, y con apalancamiento podés perder más que tu posición inicial por liquidación, pagos de funding o movimientos bruscos del mercado. El bot no elimina este riesgo — automatiza la ejecución de una estrategia que vos elegís. No hay ganancia garantizada, esperada ni implícita. La performance pasada de cualquier muestra, backtest o bot de otro usuario no predice tus resultados.
+
+4A. RIESGOS ESPECÍFICOS QUE ACEPTÁS
+Sin limitar otros riesgos, aceptás: apalancamiento y liquidación; mercados unidireccionales donde la grilla acumula una posición perdedora; gaps y volatilidad extrema; margen insuficiente; funding negativo o cambiante; fees y rebates maker/taker; slippage; tamaños mínimos y reglas de precisión; datos de mercado desactualizados, demorados, incorrectos o ausentes; latencia, rate limits, caídas, fallas de autenticación, cambios de esquema y rechazos de la API; fills parciales, duplicados, desordenados o perdidos; fallas de sincronización entre Toro y GRVT; funcionamiento de auto-shift, reinversión, stop-loss, take-profit y safeguards; fallas de navegador, servidor, base de datos, red, DNS, cloud, dependencias o energía; credenciales comprometidas; riesgo de smart contracts, oráculos, blockchain, custodia y contraparte; cambios regulatorios o impositivos; y fuerza mayor. Cualquier safeguard puede activarse tarde, no activarse o comportarse distinto en mercados rápidos. Un backtest es una simulación histórica simplificada y no puede reproducir liquidez, latencia, slippage, funding, caídas ni condiciones futuras.
 
 5. SOFTWARE PROVISTO "TAL CUAL"
 El software se provee "tal cual" y "según disponibilidad", sin garantía de ningún tipo — expresa, implícita, estatutaria o de cualquier otra forma — incluyendo cualquier garantía de comerciabilidad, idoneidad para un propósito particular, exactitud, integridad, no infracción u operación ininterrumpida. Pueden existir bugs, malas configuraciones, casos límite, race conditions, vulnerabilidades en dependencias y comportamientos no documentados que pueden causar pérdida parcial o total de fondos.
 
 6. SIN NIVEL DE SERVICIO — EL DOWNTIME ES ESPERABLE
 El operador no se compromete a ningún uptime. El servicio puede ser pausado, degradado o apagado en cualquier momento, con o sin aviso, por mantenimiento, razones de costo, razones legales, caídas de exchange, fallas de infraestructura o sin motivo. Durante el downtime tus bots pueden dejar de tradear, perder fills, no reaccionar a movimientos de precio o dejar posiciones abiertas sin gestionar — cualquiera de estas situaciones puede causar pérdidas.
+
+6A. SIN DEBER DE MONITOREAR, INTERVENIR O RESCATAR
+El operador no tiene obligación de monitorear continuamente tus bots, posiciones, margen, precio de liquidación, estado de la exchange, conectividad API ni seguridad de tu cuenta; de contactarte antes o después de un evento adverso; de cerrar posiciones manualmente; de recuperar pérdidas; ni de mantener disponible el servicio. Debés monitorear tu cuenta GRVT de forma independiente, mantener margen suficiente, conservar acceso directo a GRVT y estar preparado para cancelar órdenes, cerrar posiciones o revocar API keys sin depender de Toro.
 
 7. DEPENDENCIAS DE TERCEROS
 Este servicio depende de: GRVT (exchange, API, motor de matching, custodia), la red blockchain subyacente, infraestructura de internet, el proveedor de cloud que aloja este servidor, el sistema operativo, librerías de runtime y proveedores de envío de email. El operador no tiene control y no acepta responsabilidad por ninguna falla, caída, cambio en términos, downtime, hackeo, exploit, slippage o comportamiento malicioso de ninguno de estos terceros. Los riesgos incluyen, sin limitarse a: caídas de GRVT, límites o cambios en su API, insolvencia del exchange, bugs en smart contracts, congestión de red, fallas de oráculos y compromiso del proveedor de DNS o TLS.
@@ -495,11 +531,17 @@ En caso de compromiso del servidor, brecha de datos, robo de credenciales, pérd
 10. LIMITACIÓN DE RESPONSABILIDAD
 En la máxima medida permitida por la ley aplicable, en ningún caso el operador, los contribuidores o cualquier parte afiliada serán responsables ante vos o ante cualquier tercero por ningún reclamo, pérdida, daño, costo o gasto de ninguna naturaleza que surja de o se relacione con tu uso de este servicio. Esta limitación aplica sin importar la teoría legal de responsabilidad (contrato, daño extracontractual, negligencia, responsabilidad objetiva u otra), sin importar si el operador fue advertido de la posibilidad de tal pérdida, e incluso si una solución se considera fallida en su propósito esencial. Si alguna parte de esta limitación se considera inaplicable, la responsabilidad total agregada del operador hacia vos queda capeada en USD 1 (un dólar estadounidense).
 
+10A. LIBERACIÓN, RENUNCIA A RECLAMOS Y COMPROMISO DE NO DEMANDAR
+En la máxima medida permitida por la ley aplicable, liberás de manera consciente y voluntaria, y mantenés liberados en forma permanente, al operador, propietarios, empleados, contratistas, contribuidores, afiliados y proveedores de infraestructura frente a reclamos que surjan de o se relacionen con pérdidas de trading, liquidaciones, fees, funding, ejecución de órdenes, downtime, bugs, pérdida de datos, incidentes de seguridad, accesos no autorizados, conducta de la exchange o uso o imposibilidad de uso de Toro. En esa misma medida, renunciás al derecho de iniciar, integrar, financiar o mantener una demanda, acción colectiva, acción de clase, reclamo arbitral u otro procedimiento que procure compensación por esos eventos, y te comprometés a no demandar a las partes liberadas. Nada de estos términos excluye una responsabilidad que la ley aplicable no permita excluir; cualquier derecho legal irrenunciable queda limitado al remedio mínimo exigido por ley.
+
 11. INDEMNIZACIÓN
 Vos te comprometés a indemnizar, defender y mantener indemne al operador y a todos los contribuidores frente a cualquier reclamo, demanda, pérdida, responsabilidad, costo o gasto (incluyendo honorarios razonables de abogados) iniciado por cualquier tercero como consecuencia de tu uso del servicio, tu violación de estos términos, tu violación de cualquier ley o tu infracción de derechos de terceros.
 
 12. SIN REVERSIÓN, SIN REEMBOLSO
 No existe mecanismo de chargeback, reembolso o rollback. Los trades ejecutados por el bot son finales y se liquidan en GRVT. El operador no puede revertir un trade, deshacer una liquidación, recuperar fondos robados ni restaurar una API key perdida.
+
+12A. ACCESO SIN CARGO Y DIVULGACIÓN DEL REFERIDO
+Toro actualmente no cobra suscripción ni exige pagos o depósitos para acceder. El acceso puede requerir que tu cuenta GRVT haya sido creada con el código de referido HCAQ5ES. GRVT puede pagar al operador recompensas de referido conforme a su propio programa, sin descontar de tu cuenta una comisión separada de Toro. GRVT decide exclusivamente la atribución, elegibilidad, cálculo, pago, modificación y cancelación de recompensas. Esta relación comercial no crea un deber fiduciario, no garantiza disponibilidad del servicio y no hace al operador responsable por tus transacciones.
 
 13. CAMBIOS EN ESTOS TÉRMINOS
 El operador puede actualizar estos términos en cualquier momento. El uso continuado luego de una actualización constituye aceptación de los nuevos términos. Los cambios materiales serán visibles en el próximo login.
@@ -508,7 +550,7 @@ El operador puede actualizar estos términos en cualquier momento. El uso contin
 El operador puede suspender o terminar tu cuenta en cualquier momento, con o sin causa, con o sin aviso. Vos podés dejar de usar el servicio y revocar tus API keys de GRVT en cualquier momento.
 
 15. ACEPTACIÓN
-Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, confirmás que leíste, comprendiste y aceptás estar obligado por cada cláusula de arriba, que tenés al menos 18 años, que estás usando tus propios fondos, que tu cuenta GRVT fue creada con el referido requerido HCAQ5ES y que aceptás todo el riesgo de pérdida.`;
+Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, confirmás que leíste, comprendiste y aceptás estar obligado por cada cláusula anterior; que tenés al menos 18 años y capacidad legal para celebrar este acuerdo; que usás únicamente fondos propios que podés permitirte perder por completo; que nadie te prometió ganancias ni te pidió depositar dinero en Toro; que tu cuenta GRVT fue creada con el referido requerido HCAQ5ES; que tu API key no otorga permisos Withdraw ni Transfer; y que aceptás consciente y exclusivamente cada riesgo de trading e inversión descrito arriba.`;
 
   const SIGNUP_TOS_TEXTS = {
     en: SIGNUP_TOS_TEXT_EN,
