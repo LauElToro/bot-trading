@@ -87,7 +87,7 @@ export function SignupPage() {
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
   const [accepted, setAccepted] = useState(false);
-  const [referralCode, setReferralCode] = useState('');
+  const [referralCode] = useState(GRVT_REFERRAL_CODE);
   const [referralConfirmed, setReferralConfirmed] = useState(false);
   const [pending, setPending] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
@@ -278,12 +278,11 @@ export function SignupPage() {
                 <input
                   type="text"
                   value={referralCode}
-                  onChange={(event) => setReferralCode(event.target.value.toUpperCase())}
-                  placeholder={GRVT_REFERRAL_CODE}
+                  readOnly
                   maxLength={GRVT_REFERRAL_CODE.length}
                   disabled={pending}
                   required
-                  className={`${authInputClass} h-10 bg-white font-mono uppercase tracking-[.18em]`}
+                  className={`${authInputClass} h-10 cursor-default bg-bg-base font-mono uppercase tracking-[.18em]`}
                 />
               </label>
               <label className="mt-3 flex cursor-pointer items-start gap-2 text-[11px] leading-4 text-text-secondary">
