@@ -32,13 +32,85 @@ import {
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? '';
 
+export const ACCESS_TOKEN_KEY = 'grvt-grid-token';
+export const REFRESH_TOKEN_KEY = 'grvt-grid-refresh';
+
 // JWT token set by AuthProvider via setAuthToken(). Stored in a module
 // var so the request() helper reads the current value on every call
 // without needing React context.
 let jwtToken: string | null = null;
+let refreshToken: string | null = null;
+let refreshInFlight: Promise<boolean> | null = null;
+
 export function setAuthToken(token: string) { jwtToken = token; }
-export function clearAuthToken() { jwtToken = null; }
+export function clearAuthToken() {
+  jwtToken = null;
+  refreshToken = null;
+}
 export function getAuthToken(): string | null { return jwtToken; }
+
+export function setSessionTokens(access: string, refresh: string) {
+  jwtToken = access;
+  refreshToken = refresh;
+  localStorage.setItem(ACCESS_TOKEN_KEY, access);
+  localStorage.setItem(REFRESH_TOKEN_KEY, refresh);
+}
+
+export function clearSessionTokens() {
+  jwtToken = null;
+  refreshToken = null;
+  localStorage.removeItem(ACCESS_TOKEN_KEY);
+  localStorage.removeItem(REFRESH_TOKEN_KEY);
+}
+
+export function loadStoredSession(): { access: string | null; refresh: string | null } {
+  const access = localStorage.getItem(ACCESS_TOKEN_KEY);
+  const refresh = localStorage.getItem(REFRESH_TOKEN_KEY);
+  jwtToken = access;
+  refreshToken = refresh;
+  return { access, refresh };
+}
+
+interface AuthSession {
+  token: string;
+  accessToken?: string;
+  refreshToken?: string;
+  expiresIn?: number;
+  userId: number;
+  isAdmin: boolean;
+  hasGrvtCreds: boolean;
+}
+
+async function persistSession(session: AuthSession): Promise<AuthSession> {
+  const access = session.accessToken || session.token;
+  if (session.refreshToken) {
+    setSessionTokens(access, session.refreshToken);
+  } else {
+    setAuthToken(access);
+    localStorage.setItem(ACCESS_TOKEN_KEY, access);
+  }
+  return { ...session, token: access, accessToken: access };
+}
+
+async function tryRefreshSession(): Promise<boolean> {
+  if (refreshInFlight) return refreshInFlight;
+  const stored = refreshToken || localStorage.getItem(REFRESH_TOKEN_KEY);
+  if (!stored) return false;
+  refreshInFlight = (async () => {
+    try {
+      const next = await publicRequest<AuthSession>('/auth/refresh', {
+        refreshToken: stored,
+      });
+      await persistSession(next);
+      return true;
+    } catch {
+      return false;
+    } finally {
+      refreshInFlight = null;
+    }
+  })();
+  return refreshInFlight;
+}
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const url = `${BASE_URL}/api/v2${path}`;
@@ -67,9 +139,16 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   }
 
   if (!response.ok) {
-    // On 401, dispatch a logout event so AuthProvider clears state
-    // and redirects to /login. Only fire if we had a token (avoid
-    // infinite loops on public pages).
+    // On 401, try a single refresh-token rotation before logging out.
+    if (response.status === 401 && jwtToken && headers.get('x-retry') !== '1') {
+      const refreshed = await tryRefreshSession();
+      if (refreshed) {
+        const retryHeaders = new Headers(headers);
+        retryHeaders.set('Authorization', `Bearer ${jwtToken}`);
+        retryHeaders.set('x-retry', '1');
+        return request<T>(path, { ...init, headers: retryHeaders });
+      }
+    }
     if (response.status === 401 && jwtToken) {
       window.dispatchEvent(new Event('auth:logout'));
     }
@@ -295,20 +374,27 @@ export const api = {
   // ── Auth endpoints ──────────────────────────────────────────────
 
   signup: (email: string, password: string, tosLang: 'es' | 'en' = 'en') =>
-    publicRequest<{
-      token: string;
-      userId: number;
-      isAdmin: boolean;
-      hasGrvtCreds: boolean;
-    }>('/auth/signup', { email, password, terms_lang: tosLang }),
+    publicRequest<AuthSession>('/auth/signup', { email, password, terms_lang: tosLang })
+      .then(persistSession),
 
   login: (email: string, password: string) =>
-    publicRequest<{
-      token: string;
-      userId: number;
-      isAdmin: boolean;
-      hasGrvtCreds: boolean;
-    }>('/auth/login', { email, password }),
+    publicRequest<AuthSession>('/auth/login', { email, password })
+      .then(persistSession),
+
+  loginWithGoogle: (idToken: string, extras: {
+    acceptedTerms?: boolean;
+    tosLang?: 'es' | 'en';
+  } = {}) =>
+    publicRequest<AuthSession>('/auth/google', {
+      idToken,
+      accepted_terms: extras.acceptedTerms === true,
+      terms_lang: extras.tosLang ?? 'en',
+    }).then(persistSession),
+
+  logoutSession: (storedRefresh?: string | null) =>
+    publicRequest<{ ok: true }>('/auth/logout', {
+      refreshToken: storedRefresh || refreshToken || '',
+    }).catch(() => ({ ok: true as const })),
 
   forgotPassword: (email: string) =>
     publicRequest<{ ok: true }>('/auth/forgot-password', { email }),

@@ -161,6 +161,14 @@ export class NotifierDb {
     return row?.eq ?? 0;
   }
 
+  async getUserEmail(userId: number): Promise<string | null> {
+    const row = await this.get<{ email: string }>(
+      `SELECT email FROM users WHERE id = ?`,
+      [userId]
+    );
+    return row?.email ?? null;
+  }
+
   close(): Promise<void> {
     return new Promise((resolve, reject) => {
       this.db.close((err) => {

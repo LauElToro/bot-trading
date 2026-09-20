@@ -1,17 +1,20 @@
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { useAuth } from '@/lib/auth-context';
+import { ApiError } from '@/lib/api-types';
 import { GRVT_REFERRAL_URL } from '@/lib/brand';
 import { BrandMark } from '@/components/brand-mark';
 import { Button } from '@/components/primitives/button';
 import { Input } from '@/components/primitives/input';
-import { LanguageToggle, useT } from '@/i18n';
+import { GoogleSignInButton, isGoogleSignInEnabled } from '@/components/google-sign-in';
+import { LanguageToggle, useLang, useT } from '@/i18n';
 
 export function LoginPage() {
-  const { login } = useAuth();
+  const { login, loginWithGoogle } = useAuth();
   const navigate = useNavigate();
   const t = useT();
+  const { lang } = useLang();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [pending, setPending] = useState(false);
@@ -29,6 +32,23 @@ export function LoginPage() {
       setPending(false);
     }
   }
+
+  const handleGoogle = useCallback(async (idToken: string) => {
+    setPending(true);
+    try {
+      await loginWithGoogle(idToken);
+      navigate('/', { replace: true });
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 409) {
+        toast.error(t('auth.login.googleNeedsSignup'));
+        navigate('/signup', { replace: true });
+        return;
+      }
+      toast.error((err as Error).message || t('auth.common.googleFailed'));
+    } finally {
+      setPending(false);
+    }
+  }, [loginWithGoogle, navigate, t]);
 
   return (
     <div className="min-h-dvh flex items-center justify-center p-4 bg-bg-base">
@@ -75,6 +95,22 @@ export function LoginPage() {
             {pending ? t('auth.login.loggingIn') : t('auth.login.loginBtn')}
           </Button>
         </form>
+
+        {isGoogleSignInEnabled() && (
+          <div className="space-y-3">
+            <div className="flex items-center gap-3 text-2xs uppercase tracking-wider text-text-muted">
+              <span className="flex-1 h-px bg-border-subtle" />
+              {t('auth.common.or')}
+              <span className="flex-1 h-px bg-border-subtle" />
+            </div>
+            <GoogleSignInButton
+              onCredential={handleGoogle}
+              disabled={pending}
+              label="signin_with"
+              locale={lang}
+            />
+          </div>
+        )}
 
         <p className="text-xs text-text-muted text-center">
           {t('auth.login.noAccount')}{' '}

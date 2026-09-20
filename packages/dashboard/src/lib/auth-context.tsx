@@ -1,9 +1,9 @@
-// Auth context — manages JWT token, user profile, and auth flows.
+// Auth context — manages JWT access/refresh, user profile, and auth flows.
 //
-// Token lives in localStorage('grvt-grid-token'). On mount, if a token
-// exists, we call GET /auth/me to validate it. A 401 clears the token
-// and redirects to /login. The api-client reads the token from
-// localStorage on every request so we don't need a global ref.
+// Access token lives in localStorage('grvt-grid-token'); refresh in
+// 'grvt-grid-refresh'. On mount we validate via GET /auth/me. A 401
+// first tries /auth/refresh; if that fails we clear session and go
+// to /login. The api-client retries expired access tokens the same way.
 
 import {
   createContext,
@@ -14,10 +14,13 @@ import {
   useState,
   type ReactNode,
 } from 'react';
-import { api, setAuthToken, clearAuthToken } from './api-client';
+import {
+  api,
+  clearSessionTokens,
+  loadStoredSession,
+  setAuthToken,
+} from './api-client';
 import { wsClient } from './ws-client';
-
-const TOKEN_KEY = 'grvt-grid-token';
 
 export interface AuthUser {
   id: number;
@@ -33,6 +36,10 @@ interface AuthCtx {
   token: string | null;
   loading: boolean;
   login: (email: string, password: string) => Promise<void>;
+  loginWithGoogle: (idToken: string, extras?: {
+    acceptedTerms?: boolean;
+    tosLang?: 'es' | 'en';
+  }) => Promise<void>;
   signup: (email: string, password: string, tosLang?: 'es' | 'en') => Promise<void>;
   logout: () => void;
   refreshMe: () => Promise<void>;
@@ -41,25 +48,22 @@ interface AuthCtx {
 const AuthContext = createContext<AuthCtx | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [token, setToken] = useState<string | null>(
-    () => localStorage.getItem(TOKEN_KEY)
-  );
+  const stored = loadStoredSession();
+  const [token, setToken] = useState<string | null>(stored.access);
   const [user, setUser] = useState<AuthUser | null>(null);
-  const [loading, setLoading] = useState(!!token); // loading if we have a token to validate
+  const [loading, setLoading] = useState(!!stored.access);
 
-  const saveToken = useCallback((t: string) => {
-    localStorage.setItem(TOKEN_KEY, t);
+  const applyAccessToken = useCallback((t: string) => {
     setAuthToken(t);
     setToken(t);
-    // Kick the singleton WS so it picks up the new token. If it was
-    // already open under a previous token (token refresh), reconnect.
     wsClient.disconnect();
     wsClient.connect();
   }, []);
 
   const logout = useCallback(() => {
-    localStorage.removeItem(TOKEN_KEY);
-    clearAuthToken();
+    const refresh = loadStoredSession().refresh;
+    void api.logoutSession(refresh);
+    clearSessionTokens();
     wsClient.disconnect();
     setToken(null);
     setUser(null);
@@ -81,7 +85,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [logout]);
 
-  // On mount: validate existing token
   useEffect(() => {
     if (token) {
       setAuthToken(token);
@@ -92,7 +95,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Listen for 401 events dispatched by api-client
   useEffect(() => {
     const handler = () => logout();
     window.addEventListener('auth:logout', handler);
@@ -101,7 +103,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = useCallback(async (email: string, password: string) => {
     const res = await api.login(email, password);
-    saveToken(res.token);
+    applyAccessToken(res.token);
     setUser({
       id: res.userId,
       email,
@@ -110,7 +112,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       createdAt: 0,
       lastLoginAt: null,
     });
-  }, [saveToken]);
+  }, [applyAccessToken]);
+
+  const loginWithGoogle = useCallback(async (
+    idToken: string,
+    extras: { acceptedTerms?: boolean; tosLang?: 'es' | 'en' } = {}
+  ) => {
+    const res = await api.loginWithGoogle(idToken, extras);
+    applyAccessToken(res.token);
+    setUser({
+      id: res.userId,
+      email: '',
+      isAdmin: res.isAdmin,
+      hasGrvtCreds: res.hasGrvtCreds,
+      createdAt: extras.acceptedTerms ? Date.now() : 0,
+      lastLoginAt: null,
+    });
+    await refreshMe();
+  }, [applyAccessToken, refreshMe]);
 
   const signup = useCallback(async (
     email: string,
@@ -118,7 +137,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     tosLang: 'es' | 'en' = 'en'
   ) => {
     const res = await api.signup(email, password, tosLang);
-    saveToken(res.token);
+    applyAccessToken(res.token);
     setUser({
       id: res.userId,
       email,
@@ -127,11 +146,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       createdAt: Date.now(),
       lastLoginAt: null,
     });
-  }, [saveToken]);
+  }, [applyAccessToken]);
 
   const value = useMemo<AuthCtx>(
-    () => ({ user, token, loading, login, signup, logout, refreshMe }),
-    [user, token, loading, login, signup, logout, refreshMe]
+    () => ({ user, token, loading, login, loginWithGoogle, signup, logout, refreshMe }),
+    [user, token, loading, login, loginWithGoogle, signup, logout, refreshMe]
   );
 
   return (

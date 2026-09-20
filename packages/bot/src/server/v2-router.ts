@@ -19,9 +19,20 @@ import { childLogger } from './logger.js';
 import { cache } from './cache.js';
 import type { GridBotDB } from '../database/db.js';
 import { hashPassword, verifyPassword } from '../auth/passwords.js';
-import { signToken, verifyToken } from '../auth/jwt.js';
+import {
+  signTokenPair,
+  verifyToken,
+  verifyRefreshToken,
+  hashRefreshToken,
+  refreshTtlSeconds,
+} from '../auth/jwt.js';
 import { encryptCredentialFields } from '../auth/crypto.js';
-import { sendPasswordResetEmail, isMailerConfigured } from '../mail/mailer.js';
+import {
+  sendPasswordResetEmail,
+  sendWelcomeEmail,
+  isMailerConfigured,
+} from '../mail/mailer.js';
+import { verifyGoogleIdToken, isGoogleAuthConfigured } from '../auth/google.js';
 import { GRVTClient, type GrvtClientCreds } from '../api/client.js';
 import { invalidateGrvtClient } from '../api/grvt-client-factory.js';
 
@@ -271,6 +282,29 @@ function respondLifecycleError(
   res.status(500).json({ error: defaultErrorCode, message });
 }
 
+async function issueSession(
+  gridBotDb: GridBotDB,
+  userId: number,
+  isAdmin: boolean,
+  hasGrvtCreds: boolean
+) {
+  const pair = signTokenPair(userId);
+  await gridBotDb.insertRefreshToken({
+    user_id: userId,
+    token_hash: hashRefreshToken(pair.refreshToken),
+    expires_at: Date.now() + refreshTtlSeconds() * 1000,
+  });
+  return {
+    token: pair.accessToken,
+    accessToken: pair.accessToken,
+    refreshToken: pair.refreshToken,
+    expiresIn: pair.expiresIn,
+    userId,
+    isAdmin,
+    hasGrvtCreds,
+  };
+}
+
 // ─── Rate limiters (H-6) ───────────────────────────────────────────────
 // Protect auth endpoints from credential-stuffing / brute-force / email-
 // bombing. Limits are deliberately generous so a single user fat-fingering
@@ -494,12 +528,10 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
       terms_text_hash: createHash('sha256').update(tosText).digest('hex'),
     });
     log.info({ userId, email, isAdmin }, 'user signed up');
-    res.json({
-      token: signToken(userId),
-      userId,
-      isAdmin,
-      hasGrvtCreds: false,
+    sendWelcomeEmail(email).catch((err) => {
+      log.warn({ err, userId }, 'welcome email failed');
     });
+    res.json(await issueSession(gridBotDb, userId, isAdmin, false));
     return;
   }));
 
@@ -512,6 +544,9 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
     if (!user) {
       return res.status(401).json({ error: 'invalid email or password' });
     }
+    if (!user.password_hash) {
+      return res.status(401).json({ error: 'invalid email or password' });
+    }
     const ok = await verifyPassword(password, user.password_hash);
     if (!ok) {
       return res.status(401).json({ error: 'invalid email or password' });
@@ -519,12 +554,126 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
     await gridBotDb.updateUserLastLogin(user.id);
     const hasGrvtCreds = await gridBotDb.hasGrvtCredentials(user.id);
     log.info({ userId: user.id, email }, 'user logged in');
-    res.json({
-      token: signToken(user.id),
-      userId: user.id,
-      isAdmin: !!user.is_admin,
-      hasGrvtCreds,
-    });
+    res.json(await issueSession(gridBotDb, user.id, !!user.is_admin, hasGrvtCreds));
+    return;
+  }));
+
+  // POST /api/v2/auth/google — public. Body: { idToken, accepted_terms?, terms_lang? }
+  // Existing users log in. New users require accepted_terms (same TOS
+  // gate as email signup) so a login-page click cannot skip the form.
+  router.post('/auth/google', LOGIN_LIMITER, asyncHandler(async (req, res) => {
+    if (!isGoogleAuthConfigured()) {
+      return res.status(503).json({ error: 'google_auth_disabled' });
+    }
+    const body = (req.body ?? {}) as {
+      idToken?: unknown;
+      accepted_terms?: unknown;
+      terms_lang?: unknown;
+    };
+    const idToken = String(body.idToken ?? '').trim();
+    if (!idToken) {
+      return res.status(400).json({ error: 'missing idToken' });
+    }
+    let identity;
+    try {
+      identity = await verifyGoogleIdToken(idToken);
+    } catch (err) {
+      log.warn({ err: err instanceof Error ? err.message : String(err) }, 'google token rejected');
+      return res.status(401).json({ error: 'invalid google token' });
+    }
+
+    let user = await gridBotDb.getUserByGoogleSub(identity.sub);
+    if (!user) {
+      user = await gridBotDb.getUserByEmail(identity.email);
+      if (user) {
+        await gridBotDb.linkGoogleSub(user.id, identity.sub);
+        user = { ...user, google_sub: identity.sub };
+      }
+    }
+
+    if (!user) {
+      const accepted = body.accepted_terms === true || body.accepted_terms === 'true';
+      if (!accepted) {
+        return res.status(409).json({
+          error: 'signup_required',
+          email: identity.email,
+        });
+      }
+      const tosLang = body.terms_lang === 'es' ? 'es' : 'en';
+      const tosText = SIGNUP_TOS_TEXTS[tosLang];
+      const adminEmail = process.env.ADMIN_EMAIL?.trim().toLowerCase();
+      const isAdmin =
+        adminEmail !== undefined && adminEmail !== '' && adminEmail === identity.email;
+      const userId = await gridBotDb.createUser({
+        email: identity.email,
+        password_hash: '',
+        is_admin: isAdmin,
+        google_sub: identity.sub,
+        email_verified: true,
+      });
+      const ipAddress =
+        (req.headers['x-forwarded-for'] as string | undefined)?.split(',')[0]?.trim() ||
+        req.ip ||
+        null;
+      const userAgent = req.header('user-agent') || null;
+      await gridBotDb.insertTermsAcceptance({
+        user_id: userId,
+        context: 'signup',
+        context_ref: null,
+        ip_address: ipAddress,
+        user_agent: userAgent,
+        terms_version: `${SIGNUP_TOS_VERSION}-${tosLang}`,
+        terms_text: tosText,
+        terms_text_hash: createHash('sha256').update(tosText).digest('hex'),
+      });
+      log.info({ userId, email: identity.email, isAdmin }, 'user signed up via google');
+      sendWelcomeEmail(identity.email).catch((err) => {
+        log.warn({ err, userId }, 'welcome email failed');
+      });
+      res.json(await issueSession(gridBotDb, userId, isAdmin, false));
+      return;
+    }
+
+    await gridBotDb.updateUserLastLogin(user.id);
+    const hasGrvtCreds = await gridBotDb.hasGrvtCredentials(user.id);
+    log.info({ userId: user.id, email: user.email }, 'user logged in via google');
+    res.json(await issueSession(gridBotDb, user.id, !!user.is_admin, hasGrvtCreds));
+    return;
+  }));
+
+  // POST /api/v2/auth/refresh — public. Rotates the refresh token.
+  router.post('/auth/refresh', LOGIN_LIMITER, asyncHandler(async (req, res) => {
+    const body = (req.body ?? {}) as { refreshToken?: unknown };
+    const refreshToken = String(body.refreshToken ?? '').trim();
+    const payload = refreshToken ? verifyRefreshToken(refreshToken) : null;
+    if (!payload) {
+      return res.status(401).json({ error: 'invalid or expired refresh token' });
+    }
+    const tokenHash = hashRefreshToken(refreshToken);
+    const row = await gridBotDb.findRefreshToken(tokenHash);
+    if (!row || row.revoked_at || row.expires_at < Date.now() || row.user_id !== payload.userId) {
+      return res.status(401).json({ error: 'invalid or expired refresh token' });
+    }
+    await gridBotDb.revokeRefreshToken(tokenHash);
+    const user = await gridBotDb.getUserById(payload.userId);
+    if (!user) {
+      return res.status(401).json({ error: 'invalid or expired refresh token' });
+    }
+    const hasGrvtCreds = await gridBotDb.hasGrvtCredentials(user.id);
+    res.json(await issueSession(gridBotDb, user.id, !!user.is_admin, hasGrvtCreds));
+    return;
+  }));
+
+  // POST /api/v2/auth/logout — public (best-effort revoke). Accepts
+  // refreshToken in the body. Missing/invalid tokens still return 200
+  // so the client can always clear local state.
+  router.post('/auth/logout', asyncHandler(async (req, res) => {
+    const body = (req.body ?? {}) as { refreshToken?: unknown };
+    const refreshToken = String(body.refreshToken ?? '').trim();
+    if (refreshToken) {
+      await gridBotDb.revokeRefreshToken(hashRefreshToken(refreshToken));
+    }
+    res.json({ ok: true });
     return;
   }));
 

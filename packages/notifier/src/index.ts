@@ -28,6 +28,7 @@ import {
   statusChangeTemplate,
 } from './templates.js';
 import { WebhookClient } from './webhook.js';
+import { EmailClient, subjectForAlert } from './email.js';
 
 dotenv.config();
 
@@ -86,12 +87,14 @@ class Notifier {
   private healthServer: Server | null = null;
 
   private readonly webhook: WebhookClient;
+  private readonly email: EmailClient;
 
   constructor(cfg: NotifierConfig) {
     this.cfg = cfg;
     this.db = new NotifierDb(cfg.dbPath);
     this.telegram = new TelegramClient(cfg.telegramToken, cfg.telegramChatId);
     this.webhook = new WebhookClient(cfg.webhookUrl, cfg.webhookSecret);
+    this.email = new EmailClient();
     this.state = new StateStore(cfg.stateDir);
   }
 
@@ -153,6 +156,12 @@ class Notifier {
     if (event.userId === this.cfg.operatorUserId) {
       tasks.push(this.telegram.send(text));
     }
+    tasks.push(
+      this.db.getUserEmail(event.userId).then((to) => {
+        if (!to) return;
+        return this.email.send(to, subjectForAlert(event.type), text);
+      })
+    );
     await Promise.allSettled(tasks);
   }
 

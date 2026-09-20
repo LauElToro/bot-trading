@@ -78,6 +78,11 @@ export const MESSAGES = {
       stackTrace: 'El stack trace quedó en la consola del navegador.',
     },
     auth: {
+      common: {
+        or: 'o',
+        continueWithGoogle: 'Continuar con Google',
+        googleFailed: 'No se pudo entrar con Google',
+      },
       signup: {
         title: 'Crear cuenta',
         subtitle: 'Bot grid de LauElToro para futuros de GRVT',
@@ -98,6 +103,8 @@ export const MESSAGES = {
           'El bot opera sobre tu cuenta de GRVT. Creala con mi código de referido y recibís los beneficios de GRVT.',
         grvtReferralLink: '→ Crear cuenta GRVT con mi referido',
         grvtReferralAfter: '¿Ya tenés GRVT? Continuá con el registro acá abajo.',
+        acceptTermsFirst: 'Aceptá los términos antes de continuar con Google',
+        googleHint: 'El botón de Google queda activo cuando aceptás los términos.',
       },
       login: {
         title: 'Iniciar sesión',
@@ -113,6 +120,7 @@ export const MESSAGES = {
         signUp: 'Crear cuenta',
         loginFailed: 'Falló el login',
         welcomeBack: '¡Bienvenido de vuelta!',
+        googleNeedsSignup: 'Primera vez: creá la cuenta y aceptá los términos.',
       },
       forgotPassword: {
         title: '¿Olvidaste tu contraseña?',
@@ -825,6 +833,11 @@ export const MESSAGES = {
       stackTrace: 'Stack trace logged to the browser console.',
     },
     auth: {
+      common: {
+        or: 'or',
+        continueWithGoogle: 'Continue with Google',
+        googleFailed: 'Could not sign in with Google',
+      },
       signup: {
         title: 'Create account',
         subtitle: 'LauElToro’s grid bot for GRVT perpetuals',
@@ -845,6 +858,8 @@ export const MESSAGES = {
           'The bot trades on your GRVT account. Sign up with my referral code to get GRVT’s signup benefits.',
         grvtReferralLink: '→ Create a GRVT account with my referral',
         grvtReferralAfter: 'Already have GRVT? Continue with the signup below.',
+        acceptTermsFirst: 'Accept the terms before continuing with Google',
+        googleHint: 'The Google button is enabled after you accept the terms.',
       },
       login: {
         title: 'Sign in',
@@ -860,6 +875,7 @@ export const MESSAGES = {
         signUp: 'Create one',
         loginFailed: 'Login failed',
         welcomeBack: 'Welcome back!',
+        googleNeedsSignup: 'First time here: create an account and accept the terms.',
       },
       forgotPassword: {
         title: 'Forgot your password?',

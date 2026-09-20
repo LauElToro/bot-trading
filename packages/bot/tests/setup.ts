@@ -1,5 +1,17 @@
 // Test setup file
 // Configura mocks globales para GRVT API y database
+//
+// Env MUST be set at module load (not in beforeAll) so files that
+// construct GRVTClient at import time see values before dotenv.config()
+// reads the empty local .env.
+
+process.env.GRVT_API_SECRET ||= '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef';
+process.env.GRVT_TRADING_ADDRESS ||= '0xAbCdEf0123456789AbCdEf0123456789AbCdEf01';
+process.env.GRVT_TRADING_ACCOUNT_ID ||= '1';
+process.env.JWT_SECRET ||= 'test-jwt-secret-must-be-at-least-32-chars!!';
+process.env.JWT_ACCESS_SECRET ||= 'test-jwt-access-secret-at-least-32-chars!!';
+process.env.JWT_REFRESH_SECRET ||= 'test-jwt-refresh-secret-at-least-32-chars!';
+process.env.MOCK_MODE ||= 'true';
 
 import { vi, beforeAll, afterEach } from 'vitest';
 
@@ -50,6 +62,9 @@ beforeAll(() => {
   process.env.GRVT_API_SECRET = '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef';
   process.env.GRVT_TRADING_ADDRESS = '0xAbCdEf0123456789AbCdEf0123456789AbCdEf01';
   process.env.GRVT_TRADING_ACCOUNT_ID = '1';
+  process.env.JWT_SECRET = 'test-jwt-secret-must-be-at-least-32-chars!!';
+  process.env.JWT_ACCESS_SECRET = 'test-jwt-access-secret-at-least-32-chars!!';
+  process.env.JWT_REFRESH_SECRET = 'test-jwt-refresh-secret-at-least-32-chars!';
 });
 
 afterEach(() => {

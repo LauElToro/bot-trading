@@ -102,6 +102,12 @@ function makeMockGridBotDb() {
     countActiveBotsForUser: vi.fn().mockResolvedValue(0),
     insertTermsAcceptance: vi.fn().mockResolvedValue(undefined),
     touchGrvtCredentialsLastUsed: vi.fn().mockResolvedValue(undefined),
+    insertRefreshToken: vi.fn().mockResolvedValue(undefined),
+    findRefreshToken: vi.fn().mockResolvedValue(null),
+    revokeRefreshToken: vi.fn().mockResolvedValue(undefined),
+    revokeAllRefreshTokensForUser: vi.fn().mockResolvedValue(undefined),
+    getUserByGoogleSub: vi.fn().mockResolvedValue(null),
+    linkGoogleSub: vi.fn().mockResolvedValue(undefined),
   };
 }
 
@@ -506,6 +512,11 @@ describe('POST /api/v2/auth/signup — H-5 ADMIN_EMAIL gate', () => {
       countUsers: vi.fn().mockResolvedValue(0),
       createUser: vi.fn().mockResolvedValue(7),
       hasGrvtCredentials: vi.fn().mockResolvedValue(false),
+      insertRefreshToken: vi.fn().mockResolvedValue(undefined),
+      findRefreshToken: vi.fn().mockResolvedValue(null),
+      revokeRefreshToken: vi.fn().mockResolvedValue(undefined),
+      getUserByGoogleSub: vi.fn().mockResolvedValue(null),
+      linkGoogleSub: vi.fn().mockResolvedValue(undefined),
       ...overrides,
     };
   }
@@ -609,6 +620,7 @@ describe('Auth endpoints — H-6 rate limiting', () => {
       insertTermsAcceptance: vi.fn().mockResolvedValue(undefined),
       touchGrvtCredentialsLastUsed: vi.fn().mockResolvedValue(undefined),
       getUserByEmail: vi.fn().mockResolvedValue(null),
+      insertRefreshToken: vi.fn().mockResolvedValue(undefined),
     };
     const router = createV2Router({
       db: db as any,
@@ -671,5 +683,31 @@ describe('POST /api/v2/auth/forgot-password — C-3 Host header', () => {
     // we can't construct a usable URL. (Pre-fix this would have INSERTed
     // a token AND emailed it pointing at evil.attacker.example.com.)
     expect((gridBotDb as any).insertPasswordResetToken).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/v2/auth/google', () => {
+  const PREV = process.env.GOOGLE_CLIENT_ID;
+  afterAll(() => {
+    if (PREV === undefined) delete process.env.GOOGLE_CLIENT_ID;
+    else process.env.GOOGLE_CLIENT_ID = PREV;
+  });
+
+  it('returns 503 when Google auth is not configured', async () => {
+    delete process.env.GOOGLE_CLIENT_ID;
+    const { app } = createTestApp();
+    const res = await request(app)
+      .post('/api/v2/auth/google')
+      .send({ idToken: 'x' });
+    expect(res.status).toBe(503);
+    expect(res.body.error).toBe('google_auth_disabled');
+  });
+});
+
+describe('POST /api/v2/auth/refresh', () => {
+  it('rejects a missing refresh token', async () => {
+    const { app } = createTestApp();
+    const res = await request(app).post('/api/v2/auth/refresh').send({});
+    expect(res.status).toBe(401);
   });
 });

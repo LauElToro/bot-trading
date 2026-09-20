@@ -188,17 +188,52 @@ const basicAuth = (req: express.Request, res: express.Response, next: express.Ne
 // is served as a built Vite bundle and is CSP-friendly, but tightening
 // CSP here would break the legacy UI. Set ENABLE_CSP=1 once the legacy
 // dashboard is retired.
+const dashboardOrigins = (process.env.DASHBOARD_ORIGIN ?? '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
+const crossOriginDashboard = dashboardOrigins.length > 0;
+
 app.use(
   helmet({
     contentSecurityPolicy: process.env.ENABLE_CSP === '1' ? undefined : false,
     // crossOriginEmbedderPolicy can break embedded third-party charts;
     // leave it off (the only iframe risk is clickjacking, covered by frameguard).
     crossOriginEmbedderPolicy: false,
+    // When the SPA lives on another origin (Vercel), CORP/COOP must
+    // allow the browser to call this API and complete Google GIS popups.
+    crossOriginResourcePolicy: crossOriginDashboard
+      ? { policy: 'cross-origin' }
+      : undefined,
+    crossOriginOpenerPolicy: crossOriginDashboard
+      ? { policy: 'same-origin-allow-popups' }
+      : undefined,
     // HSTS only makes sense behind TLS — the reverse proxy strips/sets it
     // anyway, but enabling it here means localhost dev curls don't get
     // upgraded by accident. Default is fine (1y, no preload).
   })
 );
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  if (origin && dashboardOrigins.includes(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.setHeader('Vary', 'Origin');
+    res.setHeader(
+      'Access-Control-Allow-Headers',
+      'Authorization, Content-Type, X-Api-Key'
+    );
+    res.setHeader(
+      'Access-Control-Allow-Methods',
+      'GET,POST,PATCH,PUT,DELETE,OPTIONS'
+    );
+  }
+  if (req.method === 'OPTIONS' && origin && dashboardOrigins.includes(origin)) {
+    res.status(204).end();
+    return;
+  }
+  next();
+});
 app.use(express.json());
 
 // Debug logging middleware — opt-in only. Logging every single request

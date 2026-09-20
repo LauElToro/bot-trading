@@ -1,49 +1,121 @@
-// JWT helpers — HS256, 24h expiry, signed with JWT_SECRET.
+// JWT helpers — HS256 access + refresh pair.
 //
-// JWT_SECRET MUST be set in env (32+ random characters). Rotating
-// it invalidates every active session — users have to log in again.
-// That's acceptable but mention it in the ops runbook before doing
-// it on production.
+// Preferred secrets: JWT_ACCESS_SECRET + JWT_REFRESH_SECRET.
+// Fallback: JWT_SECRET (legacy single-secret installs).
+// Rotating either secret invalidates that token family.
 
+import { createHash } from 'node:crypto';
 import jwt from 'jsonwebtoken';
 
 const ISSUER = 'grvt-grid';
-const EXPIRES_IN_SECONDS = 24 * 60 * 60; // 24h
+const DEFAULT_ACCESS_TTL = 2 * 60 * 60; // 2h
+const DEFAULT_REFRESH_TTL = 14 * 24 * 60 * 60; // 14d
 
-function getSecret(): string {
-  const s = process.env.JWT_SECRET;
+function readSecret(name: string, fallback?: string): string {
+  const s = process.env[name] || fallback || '';
   if (!s || s.length < 32) {
     throw new Error(
-      'JWT_SECRET env var is missing or too short (need 32+ chars). ' +
-        'Generate one with: head -c 48 /dev/urandom | base64'
+      `${name} env var is missing or too short (need 32+ chars). ` +
+        'Generate one with: openssl rand -base64 48'
     );
   }
   return s;
+}
+
+function getAccessSecret(): string {
+  return readSecret('JWT_ACCESS_SECRET', process.env.JWT_SECRET);
+}
+
+function getRefreshSecret(): string {
+  return readSecret('JWT_REFRESH_SECRET', process.env.JWT_SECRET);
+}
+
+export function accessTtlSeconds(): number {
+  const n = Number(process.env.ACCESS_TOKEN_TTL_SECONDS);
+  return Number.isFinite(n) && n > 60 ? Math.floor(n) : DEFAULT_ACCESS_TTL;
+}
+
+export function refreshTtlSeconds(): number {
+  const n = Number(process.env.REFRESH_TOKEN_TTL_SECONDS);
+  return Number.isFinite(n) && n > 60 ? Math.floor(n) : DEFAULT_REFRESH_TTL;
 }
 
 export interface JwtPayload {
   userId: number;
 }
 
-export function signToken(userId: number): string {
-  return jwt.sign({ userId }, getSecret(), {
+export interface TokenPair {
+  accessToken: string;
+  refreshToken: string;
+  expiresIn: number;
+}
+
+export function signAccessToken(userId: number): string {
+  return jwt.sign({ userId, typ: 'access' }, getAccessSecret(), {
     algorithm: 'HS256',
     issuer: ISSUER,
-    expiresIn: EXPIRES_IN_SECONDS,
+    expiresIn: accessTtlSeconds(),
   });
+}
+
+/** @deprecated Use signAccessToken. Kept so existing callers/tests keep compiling. */
+export function signToken(userId: number): string {
+  return signAccessToken(userId);
+}
+
+export function signRefreshToken(userId: number): string {
+  return jwt.sign({ userId, typ: 'refresh' }, getRefreshSecret(), {
+    algorithm: 'HS256',
+    issuer: ISSUER,
+    expiresIn: refreshTtlSeconds(),
+  });
+}
+
+export function signTokenPair(userId: number): TokenPair {
+  return {
+    accessToken: signAccessToken(userId),
+    refreshToken: signRefreshToken(userId),
+    expiresIn: accessTtlSeconds(),
+  };
 }
 
 export function verifyToken(token: string): JwtPayload | null {
   try {
-    const decoded = jwt.verify(token, getSecret(), {
+    const decoded = jwt.verify(token, getAccessSecret(), {
       algorithms: ['HS256'],
       issuer: ISSUER,
     });
     if (typeof decoded === 'object' && decoded !== null && 'userId' in decoded) {
+      const typ = (decoded as { typ?: string }).typ;
+      if (typ && typ !== 'access') return null;
       return { userId: (decoded as { userId: number }).userId };
     }
     return null;
   } catch {
     return null;
   }
+}
+
+export function verifyRefreshToken(token: string): JwtPayload | null {
+  try {
+    const decoded = jwt.verify(token, getRefreshSecret(), {
+      algorithms: ['HS256'],
+      issuer: ISSUER,
+    });
+    if (
+      typeof decoded === 'object' &&
+      decoded !== null &&
+      'userId' in decoded &&
+      (decoded as { typ?: string }).typ === 'refresh'
+    ) {
+      return { userId: (decoded as { userId: number }).userId };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+export function hashRefreshToken(token: string): string {
+  return createHash('sha256').update(token).digest('hex');
 }

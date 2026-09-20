@@ -1,11 +1,8 @@
-// Outbound email — currently used only for E.9 password reset.
+// Outbound email — password reset + transactional notifications.
 //
-// SMTP is OPTIONAL. F.5 was skipped (Telegram is the primary notifier),
-// but password recovery needs an out-of-band channel that does not depend
-// on the user already being logged in. If SMTP_HOST/USER/PASS are set,
-// mails go out the wire. If not, we log the URL at WARN level and the
-// admin must deliver it manually — this keeps self-host without SMTP
-// functional rather than blocking signup-grade installs.
+// SMTP is OPTIONAL. Configure either the generic SMTP_* vars or the
+// Gmail aliases (GMAIL_USER + GMAIL_APP_PASSWORD). If neither is set,
+// password-reset URLs are logged at WARN for out-of-band delivery.
 
 import nodemailer, { type Transporter } from 'nodemailer';
 import { childLogger } from '../server/logger.js';
@@ -14,22 +11,64 @@ const log = childLogger('mailer');
 
 let transporter: Transporter | null = null;
 
+function gmailUser(): string {
+  return (process.env.GMAIL_USER || process.env.SMTP_USER || '').trim();
+}
+
+function gmailPass(): string {
+  // Gmail app passwords are often pasted with spaces; nodemailer wants
+  // the 16 chars either way, but stripping is more reliable.
+  return (process.env.GMAIL_APP_PASSWORD || process.env.SMTP_PASS || '').replace(/\s+/g, '');
+}
+
 export function isMailerConfigured(): boolean {
-  return !!(process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS);
+  const host = process.env.SMTP_HOST || (gmailUser() ? 'smtp.gmail.com' : '');
+  return !!(host && gmailUser() && gmailPass());
+}
+
+function mailFrom(): string {
+  return (
+    process.env.MAIL_FROM ||
+    process.env.SMTP_FROM ||
+    (gmailUser() ? `Toro <${gmailUser()}>` : 'noreply@localhost')
+  );
 }
 
 function getTransporter(): Transporter {
   if (transporter) return transporter;
+  const host = process.env.SMTP_HOST || 'smtp.gmail.com';
+  const port = Number(process.env.SMTP_PORT ?? 587);
   transporter = nodemailer.createTransport({
-    host: process.env.SMTP_HOST,
-    port: Number(process.env.SMTP_PORT ?? 587),
-    secure: process.env.SMTP_PORT === '465',
+    host,
+    port,
+    secure: port === 465,
     auth: {
-      user: process.env.SMTP_USER,
-      pass: process.env.SMTP_PASS,
+      user: gmailUser(),
+      pass: gmailPass(),
     },
   });
   return transporter;
+}
+
+async function sendMail(params: {
+  to: string;
+  subject: string;
+  text: string;
+  html: string;
+}): Promise<boolean> {
+  if (!isMailerConfigured()) {
+    log.warn({ to: params.to, subject: params.subject }, 'SMTP not configured — email not sent');
+    return false;
+  }
+  await getTransporter().sendMail({
+    from: mailFrom(),
+    to: params.to,
+    subject: params.subject,
+    text: params.text,
+    html: params.html,
+  });
+  log.info({ to: params.to, subject: params.subject }, 'email sent');
+  return true;
 }
 
 export interface PasswordResetEmail {
@@ -46,9 +85,7 @@ export async function sendPasswordResetEmail(params: PasswordResetEmail): Promis
     );
     return;
   }
-  const from = process.env.SMTP_FROM || `noreply@${process.env.SMTP_HOST}`;
-  await getTransporter().sendMail({
-    from,
+  await sendMail({
     to: params.to,
     subject: 'Reset your Toro password',
     text:
@@ -62,5 +99,38 @@ export async function sendPasswordResetEmail(params: PasswordResetEmail): Promis
       `<p>This link expires in ${params.expiresInMinutes} minutes and can be used only once. ` +
       `If you did not request this, you can ignore this email — your password will stay the same.</p>`,
   });
-  log.info({ to: params.to }, 'password reset email sent');
+}
+
+export async function sendWelcomeEmail(to: string): Promise<void> {
+  const base = process.env.APP_BASE_URL?.replace(/\/$/, '') || '';
+  const dashboardUrl = base ? `${base}/dashboard/` : '/dashboard/';
+  await sendMail({
+    to,
+    subject: 'Bienvenido a Toro',
+    text:
+      `Tu cuenta está lista.\n\n` +
+      `Siguiente paso: conectá tus credenciales de GRVT (solo permiso Trade) y creá un bot en pausa.\n` +
+      `${dashboardUrl}\n`,
+    html:
+      `<p>Tu cuenta está lista.</p>` +
+      `<p>Siguiente paso: conectá tus credenciales de GRVT (solo permiso Trade) y creá un bot en pausa.</p>` +
+      `<p><a href="${dashboardUrl}">Abrir el dashboard</a></p>`,
+  });
+}
+
+export async function sendNotificationEmail(params: {
+  to: string;
+  subject: string;
+  body: string;
+}): Promise<boolean> {
+  const escaped = params.body
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+  return sendMail({
+    to: params.to,
+    subject: params.subject,
+    text: params.body,
+    html: `<pre style="font-family:ui-sans-serif,system-ui,sans-serif;white-space:pre-wrap;line-height:1.45">${escaped}</pre>`,
+  });
 }

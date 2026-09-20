@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { useAuth } from '@/lib/auth-context';
@@ -7,10 +7,11 @@ import { GRVT_REFERRAL_URL } from '@/lib/brand';
 import { BrandMark } from '@/components/brand-mark';
 import { Button } from '@/components/primitives/button';
 import { Input } from '@/components/primitives/input';
+import { GoogleSignInButton, isGoogleSignInEnabled } from '@/components/google-sign-in';
 import { useLang, LanguageToggle } from '@/i18n';
 
 export function SignupPage() {
-  const { signup } = useAuth();
+  const { signup, loginWithGoogle } = useAuth();
   const navigate = useNavigate();
   const { lang, t } = useLang();
   const [email, setEmail] = useState('');
@@ -72,6 +73,23 @@ export function SignupPage() {
       setPending(false);
     }
   }
+
+  const handleGoogle = useCallback(async (idToken: string) => {
+    if (!accepted || !tosTexts) {
+      toast.error(t('auth.signup.acceptTermsFirst'));
+      return;
+    }
+    setPending(true);
+    try {
+      await loginWithGoogle(idToken, { acceptedTerms: true, tosLang: lang });
+      toast.success(t('auth.signup.accountCreated'));
+      navigate('/onboarding/grvt', { replace: true });
+    } catch (err) {
+      toast.error((err as Error).message || t('auth.common.googleFailed'));
+    } finally {
+      setPending(false);
+    }
+  }, [accepted, tosTexts, loginWithGoogle, lang, navigate, t]);
 
   const termsBody = tosTexts ? tosTexts[lang] : '';
 
@@ -178,6 +196,25 @@ export function SignupPage() {
             {pending ? t('auth.signup.creating') : t('auth.signup.createBtn')}
           </Button>
         </form>
+
+        {isGoogleSignInEnabled() && (
+          <div className="space-y-3">
+            <div className="flex items-center gap-3 text-2xs uppercase tracking-wider text-text-muted">
+              <span className="flex-1 h-px bg-border-subtle" />
+              {t('auth.common.or')}
+              <span className="flex-1 h-px bg-border-subtle" />
+            </div>
+            <GoogleSignInButton
+              onCredential={handleGoogle}
+              disabled={pending || !accepted || !tosTexts}
+              label="signup_with"
+              locale={lang}
+            />
+            <p className="text-2xs text-text-muted text-center">
+              {t('auth.signup.googleHint')}
+            </p>
+          </div>
+        )}
 
         <p className="text-xs text-text-muted text-center">
           {t('auth.signup.haveAccount')}{' '}

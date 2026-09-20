@@ -634,6 +634,31 @@ export class GridBotDB {
     `);
     await this.dbRun(`CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)`);
 
+    // Google Sign-In: stable subject from the ID token. Nullable —
+    // password-only users stay without it. Unique when present.
+    try {
+      await this.dbRun(`ALTER TABLE users ADD COLUMN google_sub TEXT`);
+    } catch {
+      // Already exists.
+    }
+    await this.dbRun(
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_users_google_sub ON users(google_sub) WHERE google_sub IS NOT NULL`
+    );
+
+    // Refresh tokens — SHA-256 of the raw JWT. Rotation + revoke on
+    // logout. Access tokens stay stateless.
+    await this.dbRun(`
+      CREATE TABLE IF NOT EXISTS refresh_tokens (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        token_hash TEXT NOT NULL UNIQUE,
+        expires_at INTEGER NOT NULL,
+        revoked_at INTEGER,
+        created_at INTEGER NOT NULL
+      )
+    `);
+    await this.dbRun(`CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user ON refresh_tokens(user_id)`);
+
     // grvt_credentials — AES-256-GCM encrypted GRVT API + signing
     // material. One row per user. Each field has its own IV+tag
     // because GCM requires unique IV per ciphertext under same key.
@@ -1726,10 +1751,19 @@ export class GridBotDB {
     email: string;
     password_hash: string;
     is_admin?: boolean;
+    google_sub?: string | null;
+    email_verified?: boolean;
   }): Promise<number> {
     const result = await this.dbRun(
-      `INSERT INTO users (email, password_hash, is_admin, created_at) VALUES (?, ?, ?, ?)`,
-      [params.email, params.password_hash, params.is_admin ? 1 : 0, Date.now()]
+      `INSERT INTO users (email, password_hash, is_admin, google_sub, email_verified, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+      [
+        params.email,
+        params.password_hash,
+        params.is_admin ? 1 : 0,
+        params.google_sub ?? null,
+        params.email_verified ? 1 : 0,
+        Date.now(),
+      ]
     );
     return result.lastID ?? 0;
   }
@@ -1739,6 +1773,7 @@ export class GridBotDB {
     email: string;
     password_hash: string;
     is_admin: number;
+    google_sub: string | null;
     created_at: number;
     last_login_at: number | null;
   } | null> {
@@ -1750,10 +1785,68 @@ export class GridBotDB {
     email: string;
     password_hash: string;
     is_admin: number;
+    google_sub: string | null;
     created_at: number;
     last_login_at: number | null;
   } | null> {
     return await this.dbGet(`SELECT * FROM users WHERE id = ?`, [id]);
+  }
+
+  async getUserByGoogleSub(sub: string): Promise<{
+    id: number;
+    email: string;
+    password_hash: string;
+    is_admin: number;
+    google_sub: string | null;
+    created_at: number;
+    last_login_at: number | null;
+  } | null> {
+    return await this.dbGet(`SELECT * FROM users WHERE google_sub = ?`, [sub]);
+  }
+
+  async linkGoogleSub(userId: number, sub: string): Promise<void> {
+    await this.dbRun(
+      `UPDATE users SET google_sub = ?, email_verified = 1 WHERE id = ?`,
+      [sub, userId]
+    );
+  }
+
+  async insertRefreshToken(params: {
+    user_id: number;
+    token_hash: string;
+    expires_at: number;
+  }): Promise<void> {
+    await this.dbRun(
+      `INSERT INTO refresh_tokens (user_id, token_hash, expires_at, created_at) VALUES (?, ?, ?, ?)`,
+      [params.user_id, params.token_hash, params.expires_at, Date.now()]
+    );
+  }
+
+  async findRefreshToken(tokenHash: string): Promise<{
+    id: number;
+    user_id: number;
+    token_hash: string;
+    expires_at: number;
+    revoked_at: number | null;
+  } | null> {
+    return await this.dbGet(
+      `SELECT id, user_id, token_hash, expires_at, revoked_at FROM refresh_tokens WHERE token_hash = ?`,
+      [tokenHash]
+    );
+  }
+
+  async revokeRefreshToken(tokenHash: string): Promise<void> {
+    await this.dbRun(
+      `UPDATE refresh_tokens SET revoked_at = ? WHERE token_hash = ? AND revoked_at IS NULL`,
+      [Date.now(), tokenHash]
+    );
+  }
+
+  async revokeAllRefreshTokensForUser(userId: number): Promise<void> {
+    await this.dbRun(
+      `UPDATE refresh_tokens SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL`,
+      [Date.now(), userId]
+    );
   }
 
   async updateUserLastLogin(userId: number): Promise<void> {
