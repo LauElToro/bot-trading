@@ -33,7 +33,7 @@ interface CacheEntry {
 const cache = new Map<string, CacheEntry>();
 const TTL_MS = 5 * 60 * 1000; // 5 minutes
 
-function cacheKey(userId: number, subAccountId: number | null): string {
+function cacheKey(userId: string, subAccountId: number | null): string {
   return `${userId}:${subAccountId ?? 'default'}`;
 }
 
@@ -46,7 +46,7 @@ function cacheKey(userId: number, subAccountId: number | null): string {
  * client bound to a different user's keys).
  */
 export async function getGrvtClientForBot(
-  userId: number,
+  userId: string,
   subAccountId: number | null,
   gridBotDb: GridBotDB
 ): Promise<GRVTClient> {
@@ -113,7 +113,7 @@ export async function getGrvtClientForBot(
  * route to the user's default credentials.
  */
 export async function getGrvtClientForUser(
-  userId: number,
+  userId: string,
   gridBotDb: GridBotDB
 ): Promise<GRVTClient> {
   return getGrvtClientForBot(userId, null, gridBotDb);
@@ -125,7 +125,7 @@ export async function getGrvtClientForUser(
  * the default and all sub-accounts at once). With a subAccountId,
  * removes only that exact key.
  */
-export function invalidateGrvtClient(userId: number, subAccountId?: number | null): void {
+export function invalidateGrvtClient(userId: string, subAccountId?: number | null): void {
   if (subAccountId === undefined) {
     const prefix = `${userId}:`;
     for (const k of Array.from(cache.keys())) {

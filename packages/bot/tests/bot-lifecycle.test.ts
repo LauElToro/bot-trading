@@ -20,7 +20,7 @@ import { createV2Router } from '../src/server/v2-router.js';
 
 interface BotRow {
   id: number;
-  user_id: number | null;
+  user_id: string | null;
   pair: string;
   status: 'paused' | 'running' | 'stopped';
 }
@@ -67,7 +67,7 @@ function makeMockDb() {
       cb.call({ changes: 1, lastID: 99 }, null);
     },
     _bots: bots,
-    _addBot(pair: string, status: BotRow['status'] = 'paused', userId = 1): BotRow {
+    _addBot(pair: string, status: BotRow['status'] = 'paused', userId = '00000000-0000-4000-8000-000000000001'): BotRow {
       const row: BotRow = { id: nextId++, user_id: userId, pair, status };
       bots.push(row);
       return row;
@@ -99,6 +99,7 @@ function makeMockGridBotDb() {
     countActiveBotsForUser: vi.fn().mockResolvedValue(0),
     insertTermsAcceptance: vi.fn().mockResolvedValue(undefined),
     touchGrvtCredentialsLastUsed: vi.fn().mockResolvedValue(undefined),
+    getFirstAdminUserId: vi.fn().mockResolvedValue('00000000-0000-4000-8000-000000000001'),
   };
 }
 

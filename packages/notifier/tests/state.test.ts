@@ -32,35 +32,36 @@ describe('StateStore (D.7)', () => {
   });
 
   it('persists updates atomically (tmp + rename) and round-trips them', () => {
+    const uid = '11111111-1111-4111-8111-111111111111';
     const s = new StateStore(dir);
     s.update({
-      lastRoundtripIdByUser: { '1': 42 },
-      equityHwmByUser: { '1': 1234.56 },
+      lastRoundtripIdByUser: { [uid]: 42 },
+      equityHwmByUser: { [uid]: 1234.56 },
     });
 
-    // Read with a second instance to confirm the JSON on disk parses.
     const s2 = new StateStore(dir);
-    expect(s2.get().lastRoundtripIdByUser).toEqual({ '1': 42 });
-    expect(s2.get().equityHwmByUser).toEqual({ '1': 1234.56 });
+    expect(s2.get().lastRoundtripIdByUser).toEqual({ [uid]: 42 });
+    expect(s2.get().equityHwmByUser).toEqual({ [uid]: 1234.56 });
   });
 
   it('does not leave the .tmp scratch file behind after a successful write', () => {
     const s = new StateStore(dir);
-    s.update({ lastRoundtripIdByUser: { '1': 7 } });
+    s.update({ lastRoundtripIdByUser: { '11111111-1111-4111-8111-111111111111': 7 } });
     const files = fs.readdirSync(dir);
     expect(files).toContain('cursor.json');
     expect(files.find((f) => f.endsWith('.tmp'))).toBeUndefined();
   });
 
   it('merges partial updates onto existing state without clobbering other fields', () => {
+    const uid = '11111111-1111-4111-8111-111111111111';
     const s = new StateStore(dir);
     s.update({
-      lastRoundtripIdByUser: { '1': 5 },
-      equityHwmByUser: { '1': 1000 },
+      lastRoundtripIdByUser: { [uid]: 5 },
+      equityHwmByUser: { [uid]: 1000 },
     });
-    s.update({ lastRoundtripIdByUser: { '1': 10 } }); // only id should change
-    expect(s.get().lastRoundtripIdByUser).toEqual({ '1': 10 });
-    expect(s.get().equityHwmByUser).toEqual({ '1': 1000 });
+    s.update({ lastRoundtripIdByUser: { [uid]: 10 } });
+    expect(s.get().lastRoundtripIdByUser).toEqual({ [uid]: 10 });
+    expect(s.get().equityHwmByUser).toEqual({ [uid]: 1000 });
   });
 
   it('falls back to defaults on corrupt JSON instead of throwing', () => {
@@ -69,8 +70,7 @@ describe('StateStore (D.7)', () => {
     expect(s.get().lastRoundtripIdByUser).toEqual({});
   });
 
-  it('migrates legacy single-tenant fields (lastRoundtripId / equityHwm / lastErrorHash) onto user "1"', () => {
-    // Simulate a state file written before the multi-tenant security fix.
+  it('does not invent a user id when migrating legacy single-tenant fields', () => {
     fs.writeFileSync(
       path.join(dir, 'cursor.json'),
       JSON.stringify({
@@ -82,9 +82,9 @@ describe('StateStore (D.7)', () => {
       })
     );
     const s = new StateStore(dir);
-    expect(s.get().lastRoundtripIdByUser).toEqual({ '1': 99 });
-    expect(s.get().equityHwmByUser).toEqual({ '1': 5000 });
-    expect(s.get().lastErrorHashByUser).toEqual({ '1': 'dd:5000:1' });
+    expect(s.get().lastRoundtripIdByUser).toEqual({});
+    expect(s.get().equityHwmByUser).toEqual({});
+    expect(s.get().lastErrorHashByUser).toEqual({});
     expect(s.get().lastBotStatus).toEqual({ '48': 'running' });
     expect(s.get().lastSummaryDate).toBe('2026-05-11');
   });

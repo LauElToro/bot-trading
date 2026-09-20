@@ -24,9 +24,6 @@ export interface NotifierState {
   // Last error we surfaced, to avoid spamming on the same one. Keyed
   // per user so cross-tenant alerts don't suppress each other.
   lastErrorHashByUser: Record<string, string | null>;
-  // Legacy fields kept for one-shot migration from single-tenant state
-  // files. Loaders fold these into the per-user maps under user "1"
-  // and then ignore them on subsequent runs.
   lastRoundtripId?: number;
   equityHwm?: number;
   lastErrorHash?: string | null;
@@ -39,10 +36,7 @@ export interface NotifierState {
 export interface AlertHistoryEntry {
   ts: number;
   type: string;
-  // Owner of the alert. Required for multi-tenant filtering on the bot
-  // API. Legacy rows written before the multi-tenant security fix may
-  // be missing this — the bot API treats them as user 1 (the operator).
-  userId?: number;
+  userId?: string;
   botId?: number;
   pair?: string;
   message: string;
@@ -88,30 +82,18 @@ export class StateStore {
     };
   }
 
-  /**
-   * One-shot migration from the legacy single-tenant fields
-   * (lastRoundtripId, equityHwm, lastErrorHash) into the per-user maps.
-   * Anything that lacks a per-user partition lands under user "1" — the
-   * operator — matching the bot router's COALESCE(user_id, 1) policy.
-   */
   private migrate(parsed: Partial<NotifierState>): NotifierState {
     const state = this.freshState();
     if (parsed.lastBotStatus) state.lastBotStatus = parsed.lastBotStatus;
     if (parsed.lastSummaryDate) state.lastSummaryDate = parsed.lastSummaryDate;
     if (parsed.lastRoundtripIdByUser) {
       state.lastRoundtripIdByUser = parsed.lastRoundtripIdByUser;
-    } else if (typeof parsed.lastRoundtripId === 'number') {
-      state.lastRoundtripIdByUser['1'] = parsed.lastRoundtripId;
     }
     if (parsed.equityHwmByUser) {
       state.equityHwmByUser = parsed.equityHwmByUser;
-    } else if (typeof parsed.equityHwm === 'number') {
-      state.equityHwmByUser['1'] = parsed.equityHwm;
     }
     if (parsed.lastErrorHashByUser) {
       state.lastErrorHashByUser = parsed.lastErrorHashByUser;
-    } else if (typeof parsed.lastErrorHash === 'string') {
-      state.lastErrorHashByUser['1'] = parsed.lastErrorHash;
     }
     return state;
   }

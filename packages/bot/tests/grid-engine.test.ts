@@ -60,7 +60,7 @@ describe('GridBotInstance', () => {
 
     mockBot = {
       id: 1,
-      user_id: 1,
+      user_id: '00000000-0000-4000-8000-000000000001',
       pair: 'ETH_USDT_Perp',
       direction: 'long',
       lower_price: 1800,

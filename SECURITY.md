@@ -39,5 +39,8 @@ No abras un issue público. Usá **Report a vulnerability** en [LauElToro/bot-tr
 
 ## Notas de código (fixes ya incluidos)
 
-- Auth del dashboard: JWT en el browser. `X-Api-Key` queda solo para scripts de operador.
+- Auth del dashboard: JWT en el browser. `X-Api-Key` solo si `ALLOW_LEGACY_API_KEY=1` (o `NODE_ENV=test`).
+- WebSocket autentica con el primer frame `{ type: "auth", token }`, no con query string.
+- `/api/v2/balance` y `grid-state` usan el cliente GRVT del usuario, no el del operador.
+- Signup se puede cerrar con `SIGNUP_DISABLED=1`.
 - `pause` / `close` cancelan siempre vía el cliente GRVT del dueño, aunque el bot no esté en memoria, y el close reintenta el cierre de posición.

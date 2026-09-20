@@ -1,9 +1,3 @@
-// Outbound email — password reset + transactional notifications.
-//
-// SMTP is OPTIONAL. Configure either the generic SMTP_* vars or the
-// Gmail aliases (GMAIL_USER + GMAIL_APP_PASSWORD). If neither is set,
-// password-reset URLs are logged at WARN for out-of-band delivery.
-
 import nodemailer, { type Transporter } from 'nodemailer';
 import { childLogger } from '../server/logger.js';
 
@@ -16,8 +10,6 @@ function gmailUser(): string {
 }
 
 function gmailPass(): string {
-  // Gmail app passwords are often pasted with spaces; nodemailer wants
-  // the 16 chars either way, but stripping is more reliable.
   return (process.env.GMAIL_APP_PASSWORD || process.env.SMTP_PASS || '').replace(/\s+/g, '');
 }
 
@@ -80,8 +72,8 @@ export interface PasswordResetEmail {
 export async function sendPasswordResetEmail(params: PasswordResetEmail): Promise<void> {
   if (!isMailerConfigured()) {
     log.warn(
-      { to: params.to, resetUrl: params.resetUrl, expiresInMinutes: params.expiresInMinutes },
-      'SMTP not configured — password reset URL must be delivered manually'
+      { to: params.to, expiresInMinutes: params.expiresInMinutes },
+      'SMTP not configured — password reset email not sent'
     );
     return;
   }

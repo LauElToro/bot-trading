@@ -6,7 +6,18 @@
 import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
 import express from 'express';
 import request from 'supertest';
-import { createV2Router, type V2RouterDeps } from '../src/server/v2-router.js';
+import { createV2Router } from '../src/server/v2-router.js';
+import * as factory from '../src/api/grvt-client-factory.js';
+import { TEST_OPERATOR_USER_ID } from '../src/auth/user-id.js';
+
+vi.mock('../src/api/grvt-client-factory.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/api/grvt-client-factory.js')>();
+  return {
+    ...actual,
+    getGrvtClientForUser: vi.fn(actual.getGrvtClientForUser),
+    getGrvtClientForBot: vi.fn(actual.getGrvtClientForBot),
+  };
+});
 
 // ── Mock deps ────────────────────────────────────────────────────────
 // The router takes injected deps — we provide fakes that return
@@ -108,6 +119,7 @@ function makeMockGridBotDb() {
     revokeAllRefreshTokensForUser: vi.fn().mockResolvedValue(undefined),
     getUserByGoogleSub: vi.fn().mockResolvedValue(null),
     linkGoogleSub: vi.fn().mockResolvedValue(undefined),
+    getFirstAdminUserId: vi.fn().mockResolvedValue(TEST_OPERATOR_USER_ID),
   };
 }
 
@@ -172,7 +184,7 @@ describe('GET /api/v2/health (C.6)', () => {
 describe('POST /api/v2/bots — C.9 duplicate instrument guard', () => {
   it('rejects 409 when user already has an active bot on the same pair', async () => {
     const { app, db } = createTestApp();
-    db._addBot({ id: 1, user_id: 1, pair: 'ETH_USDT_Perp', status: 'running' });
+    db._addBot({ id: 1, user_id: TEST_OPERATOR_USER_ID, pair: 'ETH_USDT_Perp', status: 'running' });
 
     const res = await request(app)
       .post('/api/v2/bots')
@@ -193,7 +205,7 @@ describe('POST /api/v2/bots — C.9 duplicate instrument guard', () => {
 
   it('allows creation on a different pair', async () => {
     const { app, db } = createTestApp();
-    db._addBot({ id: 1, user_id: 1, pair: 'ETH_USDT_Perp', status: 'running' });
+    db._addBot({ id: 1, user_id: TEST_OPERATOR_USER_ID, pair: 'ETH_USDT_Perp', status: 'running' });
 
     const res = await request(app)
       .post('/api/v2/bots')
@@ -214,7 +226,7 @@ describe('POST /api/v2/bots — C.9 duplicate instrument guard', () => {
 
   it('allows creation when existing bot is stopped', async () => {
     const { app, db } = createTestApp();
-    db._addBot({ id: 1, user_id: 1, pair: 'ETH_USDT_Perp', status: 'stopped' });
+    db._addBot({ id: 1, user_id: TEST_OPERATOR_USER_ID, pair: 'ETH_USDT_Perp', status: 'stopped' });
 
     const res = await request(app)
       .post('/api/v2/bots')
@@ -479,13 +491,13 @@ describe('GET /api/v2/metrics — C-4 gate', () => {
     expect(ok.text).toContain('grvt_bot_count');
   });
 
-  it('accepts token via ?token= query param too', async () => {
+  it('rejects token via ?token= query param', async () => {
     process.env.METRICS_TOKEN = 'super-secret-token-32-chars-min!!';
     const { app } = createTestApp();
-    const ok = await request(app).get(
+    const res = await request(app).get(
       '/api/v2/metrics?token=super-secret-token-32-chars-min!!'
     );
-    expect(ok.status).toBe(200);
+    expect(res.status).toBe(401);
   });
 });
 
@@ -510,7 +522,7 @@ describe('POST /api/v2/auth/signup — H-5 ADMIN_EMAIL gate', () => {
       touchGrvtCredentialsLastUsed: vi.fn().mockResolvedValue(undefined),
       getUserByEmail: vi.fn().mockResolvedValue(null),
       countUsers: vi.fn().mockResolvedValue(0),
-      createUser: vi.fn().mockResolvedValue(7),
+      createUser: vi.fn().mockResolvedValue('11111111-1111-4111-8111-111111111111'),
       hasGrvtCredentials: vi.fn().mockResolvedValue(false),
       insertRefreshToken: vi.fn().mockResolvedValue(undefined),
       findRefreshToken: vi.fn().mockResolvedValue(null),
@@ -709,5 +721,46 @@ describe('POST /api/v2/auth/refresh', () => {
     const { app } = createTestApp();
     const res = await request(app).post('/api/v2/auth/refresh').send({});
     expect(res.status).toBe(401);
+  });
+});
+
+describe('POST /api/v2/auth/signup — SIGNUP_DISABLED', () => {
+  const PREV = process.env.SIGNUP_DISABLED;
+  afterAll(() => {
+    if (PREV === undefined) delete process.env.SIGNUP_DISABLED;
+    else process.env.SIGNUP_DISABLED = PREV;
+  });
+
+  it('returns 403 when SIGNUP_DISABLED=1', async () => {
+    process.env.SIGNUP_DISABLED = '1';
+    const { app } = createTestApp();
+    const res = await request(app)
+      .post('/api/v2/auth/signup')
+      .send({ email: 'new@example.com', password: 'supersecret' });
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe('signup_disabled');
+  });
+});
+
+describe('GET /api/v2/balance — per-user GRVT client', () => {
+  it('uses the authenticated user client, not the operator singleton', async () => {
+    const userClient = {
+      getBalance: vi.fn().mockResolvedValue({ total_equity: '42', available_balance: '7' }),
+    };
+    const spy = vi
+      .spyOn(factory, 'getGrvtClientForUser')
+      .mockResolvedValue(userClient as never);
+    const { app, grvtClient } = createTestApp();
+    grvtClient.getBalance.mockResolvedValue({ total_equity: '99999' });
+
+    const res = await request(app)
+      .get('/api/v2/balance')
+      .set('X-Api-Key', API_KEY);
+
+    expect(res.status).toBe(200);
+    expect(res.body.balance).toEqual({ total_equity: '42', available_balance: '7' });
+    expect(grvtClient.getBalance).not.toHaveBeenCalled();
+    expect(spy).toHaveBeenCalled();
+    spy.mockRestore();
   });
 });

@@ -6,16 +6,14 @@ import sqlite3 from 'sqlite3';
 import { promisify } from 'util';
 import path from 'path';
 import fs from 'fs';
+import { isUserId, newUserId, type UserId } from '../auth/user-id.js';
 
 // Configurar SQLite para verbose logging en desarrollo
 const Database = process.env.NODE_ENV === 'production' ? sqlite3.Database : sqlite3.verbose().Database;
 
 export interface GridBot {
   id: number;
-  // Multi-tenant: which user owns this bot. Required for all new
-  // bots; nullable on the type for backward compat with rows from
-  // before the migration (those get backfilled by ownerBootstrap).
-  user_id?: number;
+  user_id?: UserId | null;
   pair: string;
   direction: 'long' | 'short';
   leverage: number;
@@ -618,11 +616,10 @@ export class GridBotDB {
       )
     `);
 
-    // users — one row per account. Owner is user_id=1, created via
-    // owner bootstrap (see initialize()).
+    // users — one row per account. PK is UUIDv4 (see newUserId).
     await this.dbRun(`
       CREATE TABLE IF NOT EXISTS users (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        id TEXT PRIMARY KEY,
         email TEXT NOT NULL UNIQUE,
         password_hash TEXT NOT NULL,
         email_verified INTEGER NOT NULL DEFAULT 0,
@@ -650,7 +647,7 @@ export class GridBotDB {
     await this.dbRun(`
       CREATE TABLE IF NOT EXISTS refresh_tokens (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         token_hash TEXT NOT NULL UNIQUE,
         expires_at INTEGER NOT NULL,
         revoked_at INTEGER,
@@ -666,7 +663,7 @@ export class GridBotDB {
     // every user must re-paste their credentials.
     await this.dbRun(`
       CREATE TABLE IF NOT EXISTS grvt_credentials (
-        user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
         encrypted_api_key TEXT NOT NULL,
         api_key_iv TEXT NOT NULL,
         api_key_tag TEXT NOT NULL,
@@ -698,7 +695,7 @@ export class GridBotDB {
     await this.dbRun(`
       CREATE TABLE IF NOT EXISTS terms_acceptances (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         context TEXT NOT NULL,
         context_ref INTEGER,
         accepted_at INTEGER NOT NULL,
@@ -717,7 +714,7 @@ export class GridBotDB {
     await this.dbRun(`
       CREATE TABLE IF NOT EXISTS grvt_sub_accounts (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         label TEXT NOT NULL DEFAULT 'Default',
         encrypted_api_key TEXT NOT NULL,
         api_key_iv TEXT NOT NULL,
@@ -749,7 +746,7 @@ export class GridBotDB {
     await this.dbRun(`
       CREATE TABLE IF NOT EXISTS password_reset_tokens (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         token_hash TEXT NOT NULL,
         expires_at INTEGER NOT NULL,
         used_at INTEGER,
@@ -823,11 +820,95 @@ export class GridBotDB {
       `);
     }
 
-    // Stamp version 1 (idempotent).
+    await this.ensureUuidUserIds();
+
     await this.dbRun(`
       INSERT OR IGNORE INTO schema_version (version, applied_at)
       VALUES (1, ?)
     `, [Date.now()]);
+  }
+
+  private async ensureUuidUserIds(): Promise<void> {
+    const rows = await this.dbAll(`SELECT * FROM users`);
+    const needsRewrite = rows.some((row: { id: unknown }) => !isUserId(row.id));
+    if (!needsRewrite) return;
+
+    const map = new Map<string, UserId>();
+    for (const row of rows as Array<{ id: unknown }>) {
+      const oldId = String(row.id);
+      map.set(oldId, isUserId(row.id) ? row.id : newUserId());
+    }
+
+    await this.dbRun('PRAGMA foreign_keys = OFF');
+    await this.dbRun(`
+      CREATE TABLE users_uuid (
+        id TEXT PRIMARY KEY,
+        email TEXT NOT NULL UNIQUE,
+        password_hash TEXT NOT NULL,
+        email_verified INTEGER NOT NULL DEFAULT 0,
+        is_admin INTEGER NOT NULL DEFAULT 0,
+        accepted_referral_link INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL,
+        last_login_at INTEGER,
+        google_sub TEXT
+      )
+    `);
+    for (const row of rows as Array<Record<string, unknown>>) {
+      const id = map.get(String(row.id));
+      await this.dbRun(
+        `INSERT INTO users_uuid (id, email, password_hash, email_verified, is_admin, accepted_referral_link, created_at, last_login_at, google_sub)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          id,
+          row.email,
+          row.password_hash,
+          row.email_verified ?? 0,
+          row.is_admin ?? 0,
+          row.accepted_referral_link ?? 0,
+          row.created_at,
+          row.last_login_at ?? null,
+          row.google_sub ?? null,
+        ]
+      );
+    }
+    await this.dbRun(`DROP TABLE users`);
+    await this.dbRun(`ALTER TABLE users_uuid RENAME TO users`);
+    await this.dbRun(`CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)`);
+    await this.dbRun(
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_users_google_sub ON users(google_sub) WHERE google_sub IS NOT NULL`
+    );
+
+    const childTables = [
+      'refresh_tokens',
+      'grvt_credentials',
+      'terms_acceptances',
+      'grvt_sub_accounts',
+      'password_reset_tokens',
+      'grid_bots',
+      'grid_levels',
+      'orders',
+      'trades',
+      'funding_history',
+      'daily_snapshots',
+      'fills_archive',
+      'bot_cash_movements',
+      'paired_roundtrips',
+    ];
+    for (const [oldId, newId] of map) {
+      if (oldId === newId) continue;
+      for (const table of childTables) {
+        try {
+          await this.dbRun(
+            `UPDATE ${table} SET user_id = ? WHERE CAST(user_id AS TEXT) = ?`,
+            [newId, oldId]
+          );
+        } catch {
+          // table may not exist on a fresh install
+        }
+      }
+    }
+    await this.dbRun('PRAGMA foreign_keys = ON');
+    console.log(`Migrated ${map.size} user id(s) to UUIDv4`);
   }
 
   // === CRUD para grid_bots ===
@@ -851,14 +932,8 @@ export class GridBotDB {
     // formula above when params.quantity_per_level is not provided.
     const quantityPerLevel = params.quantity_per_level ?? computedQty;
 
-    // Multi-tenant: user_id is required for all new bots. Owners that
-    // upgraded from single-tenant get backfilled to user_id=1 by the
-    // owner bootstrap; the application is expected to always pass it
-    // explicitly going forward. We accept undefined here only as a
-    // transition affordance and let the trigger backfill from the
-    // parent (which won't happen if it's null on the parent itself).
     if (params.user_id == null) {
-      console.warn(`⚠️  createBot called without user_id — this should only happen during legacy migration`);
+      throw new Error('user_id is required to create a bot');
     }
 
     // Set original_investment_usdt = investment_usdt at creation. After
@@ -1753,10 +1828,12 @@ export class GridBotDB {
     is_admin?: boolean;
     google_sub?: string | null;
     email_verified?: boolean;
-  }): Promise<number> {
-    const result = await this.dbRun(
-      `INSERT INTO users (email, password_hash, is_admin, google_sub, email_verified, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+  }): Promise<UserId> {
+    const id = newUserId();
+    await this.dbRun(
+      `INSERT INTO users (id, email, password_hash, is_admin, google_sub, email_verified, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
       [
+        id,
         params.email,
         params.password_hash,
         params.is_admin ? 1 : 0,
@@ -1765,11 +1842,11 @@ export class GridBotDB {
         Date.now(),
       ]
     );
-    return result.lastID ?? 0;
+    return id;
   }
 
   async getUserByEmail(email: string): Promise<{
-    id: number;
+    id: UserId;
     email: string;
     password_hash: string;
     is_admin: number;
@@ -1780,8 +1857,8 @@ export class GridBotDB {
     return await this.dbGet(`SELECT * FROM users WHERE email = ?`, [email]);
   }
 
-  async getUserById(id: number): Promise<{
-    id: number;
+  async getUserById(id: UserId): Promise<{
+    id: UserId;
     email: string;
     password_hash: string;
     is_admin: number;
@@ -1793,7 +1870,7 @@ export class GridBotDB {
   }
 
   async getUserByGoogleSub(sub: string): Promise<{
-    id: number;
+    id: UserId;
     email: string;
     password_hash: string;
     is_admin: number;
@@ -1804,7 +1881,7 @@ export class GridBotDB {
     return await this.dbGet(`SELECT * FROM users WHERE google_sub = ?`, [sub]);
   }
 
-  async linkGoogleSub(userId: number, sub: string): Promise<void> {
+  async linkGoogleSub(userId: UserId, sub: string): Promise<void> {
     await this.dbRun(
       `UPDATE users SET google_sub = ?, email_verified = 1 WHERE id = ?`,
       [sub, userId]
@@ -1812,7 +1889,7 @@ export class GridBotDB {
   }
 
   async insertRefreshToken(params: {
-    user_id: number;
+    user_id: UserId;
     token_hash: string;
     expires_at: number;
   }): Promise<void> {
@@ -1824,7 +1901,7 @@ export class GridBotDB {
 
   async findRefreshToken(tokenHash: string): Promise<{
     id: number;
-    user_id: number;
+    user_id: UserId;
     token_hash: string;
     expires_at: number;
     revoked_at: number | null;
@@ -1842,14 +1919,14 @@ export class GridBotDB {
     );
   }
 
-  async revokeAllRefreshTokensForUser(userId: number): Promise<void> {
+  async revokeAllRefreshTokensForUser(userId: UserId): Promise<void> {
     await this.dbRun(
       `UPDATE refresh_tokens SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL`,
       [Date.now(), userId]
     );
   }
 
-  async updateUserLastLogin(userId: number): Promise<void> {
+  async updateUserLastLogin(userId: UserId): Promise<void> {
     await this.dbRun(
       `UPDATE users SET last_login_at = ? WHERE id = ?`,
       [Date.now(), userId]
@@ -1861,7 +1938,7 @@ export class GridBotDB {
     return (row?.c as number) ?? 0;
   }
 
-  async updateUserPassword(userId: number, password_hash: string): Promise<void> {
+  async updateUserPassword(userId: UserId, password_hash: string): Promise<void> {
     await this.dbRun(
       `UPDATE users SET password_hash = ? WHERE id = ?`,
       [password_hash, userId]
@@ -1871,7 +1948,7 @@ export class GridBotDB {
   // ─── Multi-tenant: password reset tokens (E.9) ─────────────────
 
   async insertPasswordResetToken(params: {
-    user_id: number;
+    user_id: UserId;
     token_hash: string;
     expires_at: number;
     ip_address: string | null;
@@ -1886,7 +1963,7 @@ export class GridBotDB {
 
   async findValidPasswordResetToken(token_hash: string): Promise<{
     id: number;
-    user_id: number;
+    user_id: UserId;
     expires_at: number;
   } | null> {
     return await this.dbGet(
@@ -1906,7 +1983,7 @@ export class GridBotDB {
   // Mark all open tokens for a user as used. Called when issuing a new
   // token (so only the latest is valid) AND after a successful reset
   // (so a stolen-but-not-yet-used link is invalidated).
-  async invalidateOpenPasswordResetTokensForUser(userId: number): Promise<void> {
+  async invalidateOpenPasswordResetTokensForUser(userId: UserId): Promise<void> {
     await this.dbRun(
       `UPDATE password_reset_tokens SET used_at = ? WHERE user_id = ? AND used_at IS NULL`,
       [Date.now(), userId]
@@ -1916,7 +1993,7 @@ export class GridBotDB {
   // ─── Multi-tenant: terms acceptances ───────────────────────────
 
   async insertTermsAcceptance(params: {
-    user_id: number;
+    user_id: UserId;
     context: 'signup' | 'create_bot' | 'update_credentials';
     context_ref?: number | null;
     ip_address: string | null;
@@ -1949,7 +2026,7 @@ export class GridBotDB {
   // decryption happens in the api/grvt-client-factory layer.
 
   async upsertGrvtCredentials(params: {
-    user_id: number;
+    user_id: UserId;
     encrypted_api_key: string;        api_key_iv: string;        api_key_tag: string;
     encrypted_api_secret: string;     api_secret_iv: string;     api_secret_tag: string;
     encrypted_trading_address: string;trading_address_iv: string;trading_address_tag: string;
@@ -2001,8 +2078,8 @@ export class GridBotDB {
     );
   }
 
-  async getGrvtCredentialsRaw(userId: number): Promise<{
-    user_id: number;
+  async getGrvtCredentialsRaw(userId: UserId): Promise<{
+    user_id: UserId;
     encrypted_api_key: string;        api_key_iv: string;        api_key_tag: string;
     encrypted_api_secret: string;     api_secret_iv: string;     api_secret_tag: string;
     encrypted_trading_address: string;trading_address_iv: string;trading_address_tag: string;
@@ -2017,12 +2094,12 @@ export class GridBotDB {
     return await this.dbGet(`SELECT * FROM grvt_credentials WHERE user_id = ?`, [userId]);
   }
 
-  async hasGrvtCredentials(userId: number): Promise<boolean> {
+  async hasGrvtCredentials(userId: UserId): Promise<boolean> {
     const row = await this.dbGet(`SELECT 1 FROM grvt_credentials WHERE user_id = ?`, [userId]);
     return !!row;
   }
 
-  async deleteGrvtCredentials(userId: number): Promise<void> {
+  async deleteGrvtCredentials(userId: UserId): Promise<void> {
     await this.dbRun(`DELETE FROM grvt_credentials WHERE user_id = ?`, [userId]);
   }
 
@@ -2031,7 +2108,7 @@ export class GridBotDB {
   // user's stored credentials — surfaces a persistent warning in the
   // dashboard until the user re-saves their keys.
   async markGrvtCredentialsTestResult(
-    userId: number,
+    userId: UserId,
     ok: boolean,
     errorMessage?: string | null,
   ): Promise<void> {
@@ -2043,7 +2120,7 @@ export class GridBotDB {
     );
   }
 
-  async touchGrvtCredentialsLastUsed(userId: number): Promise<void> {
+  async touchGrvtCredentialsLastUsed(userId: UserId): Promise<void> {
     await this.dbRun(
       `UPDATE grvt_credentials SET last_used_at = ? WHERE user_id = ?`,
       [Date.now(), userId]
@@ -2055,9 +2132,9 @@ export class GridBotDB {
   // (grvt_credentials) stay; this table holds extras with a label.
   // Bots reference a row here via grid_bots.grvt_sub_account_id.
 
-  async listGrvtSubAccounts(userId: number): Promise<Array<{
+  async listGrvtSubAccounts(userId: UserId): Promise<Array<{
     id: number;
-    user_id: number;
+    user_id: UserId;
     label: string;
     is_default: number;
     last_test_ok: number | null;
@@ -2074,7 +2151,7 @@ export class GridBotDB {
 
   async getGrvtSubAccountRaw(id: number): Promise<{
     id: number;
-    user_id: number;
+    user_id: UserId;
     label: string;
     encrypted_api_key: string;        api_key_iv: string;        api_key_tag: string;
     encrypted_api_secret: string;     api_secret_iv: string;     api_secret_tag: string;
@@ -2092,7 +2169,7 @@ export class GridBotDB {
   }
 
   async createGrvtSubAccount(params: {
-    user_id: number;
+    user_id: UserId;
     label: string;
     encrypted_api_key: string;        api_key_iv: string;        api_key_tag: string;
     encrypted_api_secret: string;     api_secret_iv: string;     api_secret_tag: string;
@@ -2142,7 +2219,7 @@ export class GridBotDB {
 
   async updateGrvtSubAccountMeta(
     id: number,
-    userId: number,
+    userId: UserId,
     patch: { label?: string; is_default?: boolean }
   ): Promise<void> {
     if (patch.is_default === true) {
@@ -2168,7 +2245,7 @@ export class GridBotDB {
     );
   }
 
-  async deleteGrvtSubAccount(id: number, userId: number): Promise<void> {
+  async deleteGrvtSubAccount(id: number, userId: UserId): Promise<void> {
     await this.dbRun(
       `DELETE FROM grvt_sub_accounts WHERE id = ? AND user_id = ?`,
       [id, userId]
@@ -2185,14 +2262,14 @@ export class GridBotDB {
 
   // ─── Multi-tenant: bot listing per user ────────────────────────
 
-  async getBotsForUser(userId: number): Promise<GridBot[]> {
+  async getBotsForUser(userId: UserId): Promise<GridBot[]> {
     return await this.dbAll(
       `SELECT * FROM grid_bots WHERE user_id = ? ORDER BY created_at DESC`,
       [userId]
     );
   }
 
-  async countActiveBotsForUser(userId: number): Promise<number> {
+  async countActiveBotsForUser(userId: UserId): Promise<number> {
     const row = await this.dbGet(
       `SELECT COUNT(*) as c FROM grid_bots WHERE user_id = ? AND status IN ('running', 'paused')`,
       [userId]
@@ -2201,18 +2278,30 @@ export class GridBotDB {
   }
 
   // ─── Owner bootstrap ───────────────────────────────────────────
-  // Idempotent. If users table is empty, creates user 1 from
-  // OWNER_EMAIL + OWNER_INITIAL_PASSWORD env vars and backfills
-  // every existing per-bot row to user_id=1. Skips silently if
-  // any user already exists.
+  // Idempotent. If users is empty, creates a UUIDv4 admin from
+  // OWNER_EMAIL + OWNER_INITIAL_PASSWORD and backfills NULL
+  // user_id rows to that admin. If users already exist, returns
+  // the first admin UUID (or the first valid UUID).
+  async getFirstAdminUserId(): Promise<UserId | null> {
+    const row = await this.dbGet(
+      `SELECT id FROM users WHERE is_admin = 1 ORDER BY created_at ASC LIMIT 1`
+    );
+    return isUserId(row?.id) ? row.id : null;
+  }
+
   async ownerBootstrap(params: {
     email: string;
     password_hash: string;
-  }): Promise<{ created: boolean; userId: number }> {
+  }): Promise<{ created: boolean; userId: UserId }> {
     const existing = await this.countUsers();
     if (existing > 0) {
-      const owner = await this.dbGet(`SELECT id FROM users ORDER BY id ASC LIMIT 1`);
-      return { created: false, userId: owner?.id ?? 1 };
+      const admin = await this.getFirstAdminUserId();
+      if (admin) return { created: false, userId: admin };
+      const first = await this.dbGet(`SELECT id FROM users ORDER BY created_at ASC LIMIT 1`);
+      if (!isUserId(first?.id)) {
+        throw new Error('users table has rows but no valid UUID id');
+      }
+      return { created: false, userId: first.id };
     }
     const userId = await this.createUser({
       email: params.email,

@@ -11,11 +11,7 @@ import { EventEmitter } from 'events';
 const log = childLogger('engine');
 
 export interface GridConfig {
-  // Multi-tenant: which user owns this bot. Required for new bots
-  // created via the API; optional in the type so legacy callers
-  // (admin scripts, tests) can omit it and the bot defaults to
-  // user 1 (the owner).
-  userId?: number;
+  userId?: string;
   pair: string;
   direction: 'long' | 'short';
   leverage: number;
@@ -425,34 +421,18 @@ export class GridEngine extends EventEmitter {
   private async getClientForBot(
     bot: {
       id?: number;
-      user_id?: number | null | undefined;
+      user_id?: string | null | undefined;
       grvt_sub_account_id?: number | null;
     }
   ): Promise<GRVTClient> {
-    if (bot.user_id != null) {
-      // STRICT: never fall back to the operator's singleton when the
-      // bot has an owner. The previous fallback was a CRITICAL bug —
-      // any transient failure in the per-user lookup (login throttle,
-      // revoked key, missing creds) routed that user's bot orders into
-      // the OPERATOR's GRVT sub-account. Logs showed 3147 silent
-      // fallbacks in a single deployment, with bots from users like
-      // 138 (HYPE) and 224 (MSFT) placing orders against user 1's
-      // wallet. Incident: 2026-06-03.
-      //
-      // Caller is responsible for catching this throw and either
-      // skipping the tick or marking the bot errored. Either is
-      // strictly safer than running it under the wrong identity.
-      return await getGrvtClientForBot(
-        bot.user_id,
-        bot.grvt_sub_account_id ?? null,
-        db as any
-      );
+    if (bot.user_id == null) {
+      throw new Error('bot has no user_id; refusing operator fallback');
     }
-    // Legacy bots with NO user_id (pre-multi-tenant rows) keep using
-    // the singleton, which is bound to the operator account. Those
-    // bots SHOULD be backfilled to user 1; until then the singleton
-    // is the right identity for them.
-    return grvtClient;
+    return await getGrvtClientForBot(
+      bot.user_id,
+      bot.grvt_sub_account_id ?? null,
+      db as any
+    );
   }
 
   /**
@@ -463,7 +443,7 @@ export class GridEngine extends EventEmitter {
    * and every bot belonging to the user gets refreshed.
    */
   async rebindGrvtClient(
-    userId: number,
+    userId: string,
     subAccountId?: number | null
   ): Promise<void> {
     invalidateGrvtClient(userId, subAccountId);
@@ -681,7 +661,9 @@ export class GridEngine extends EventEmitter {
    */
   async createBot(config: GridConfig): Promise<number> {
     try {
-      // Validar configuración
+      if (!config.userId) {
+        throw new Error('userId is required to create a bot');
+      }
       this.validateGridConfig(config);
 
       // Calcular niveles de grid
@@ -699,9 +681,7 @@ export class GridEngine extends EventEmitter {
       const activeWindowSize = virtualEnabled ? (config.activeWindowSize ?? 70) : null;
 
       const botId = await db.createBot({
-        // Default to user 1 (owner) when caller omits — admin
-        // scripts and legacy code paths get the right behavior.
-        user_id: config.userId ?? 1,
+        user_id: config.userId,
         pair: config.pair,
         direction: config.direction,
         leverage: config.leverage,
@@ -2150,10 +2130,6 @@ export class GridBotInstance {
   // level is treated normally — if GRVT still doesn't show it, the order
   // was cancelled or filled, and the normal flow takes over.
   private recentlyPlaced = new Map<number, number>();
-  // Multi-tenant: per-user GRVT client resolved by GridEngine via
-  // getClientForBot(). Falls back to the module-level `grvtClient`
-  // singleton only for legacy bots with no user_id (the factory
-  // couldn't resolve a per-user client).
   private injectedClient: GRVTClient | null = null;
 
   constructor(bot: GridBot, client?: GRVTClient) {
@@ -2161,8 +2137,6 @@ export class GridBotInstance {
     this.injectedClient = client ?? null;
   }
 
-  /** Accessor for the GRVT client this bot should use. Falls back
-   *  to the legacy singleton if no per-user client was injected. */
   private get grvt(): GRVTClient {
     return this.injectedClient ?? grvtClient;
   }

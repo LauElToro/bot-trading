@@ -1,32 +1,3 @@
-// WebSocket server for the v2 dashboard.
-//
-// Mounts on the existing Express HTTP server at the path /ws and handles
-// the upgrade dance. Each client:
-//
-//   1. Connects to ws://host:3848/ws?token=<jwt>  (multi-tenant)
-//      or    ws://host:3848/ws?api_key=<key>      (legacy operator/admin)
-//   2. Server validates the credential and closes with 4401 if invalid.
-//      JWT clients have their userId stamped on the connection so we can
-//      enforce bot-channel ownership at subscribe time. api_key clients
-//      are treated as the operator (no per-channel filtering — they own
-//      the box).
-//   3. Server sends a `hello` frame with server version + a session id.
-//   4. Client sends `subscribe` frames listing channels it wants
-//      (e.g. `bot:42`, `prices`, `notifications`).
-//   5. For channels that match `bot:<id>`, the server verifies ownership
-//      against the DB before wiring up the bus subscription. Foreign-bot
-//      subscriptions are silently dropped (the ack lists only the
-//      accepted channels).
-//   6. Server forwards bus events for accepted channels via WsBus.subscribe.
-//   7. On disconnect, all subscriptions are torn down.
-//
-// Heartbeat: server pings every 30s, closes connections that don't pong
-// within 5s. Browsers handle this transparently, but it lets us detect
-// dead clients (e.g. laptop closed) and free their subscriptions.
-//
-// All ws traffic is JSON. We don't do binary frames or msgpack — the volume
-// is low (a few hundred messages per minute at most) and JSON is debuggable.
-
 import { WebSocketServer, WebSocket, type RawData } from 'ws';
 import type { IncomingMessage } from 'node:http';
 import type { Server as HttpServer } from 'node:http';
@@ -36,33 +7,26 @@ import { randomUUID } from 'node:crypto';
 
 const log = childLogger('ws-server');
 
-// 4xxx codes are app-level (not standard close codes).
 const CLOSE_UNAUTHORIZED = 4401;
 const CLOSE_BAD_REQUEST = 4400;
+const AUTH_TIMEOUT_MS = 2_000;
 
 interface ClientState {
   id: string;
   ws: WebSocket;
-  // null for legacy operator (api_key) connections — those bypass per-bot
-  // ownership checks. A number means this is a JWT-authed user and bot
-  // channels must belong to them.
-  userId: number | null;
-  unsubscribers: Map<string, () => void>;  // channel -> teardown
+  userId: string | null;
+  unsubscribers: Map<string, () => void>;
   isAlive: boolean;
 }
 
 export interface WsServerOptions {
   apiKey: string;
-  // Verifies a JWT and returns the userId, or null if invalid/expired.
-  // Optional — if omitted, only api_key auth works. In production the
-  // bootstrap wires this to auth/jwt.ts:verifyToken.
-  verifyToken?: (token: string) => { userId: number } | null;
-  // Resolves whether a JWT-authed user is allowed to subscribe to a
-  // channel. Called for every `subscribe` frame. Optional — when
-  // omitted, every channel is allowed (useful in unit tests). The
-  // bootstrap wires this to a DB-backed lookup that gates `bot:<id>`
-  // channels by user ownership.
-  authorizeChannel?: (userId: number, channel: string) => Promise<boolean>;
+  verifyToken?: (token: string) => { userId: string } | null;
+  authorizeChannel?: (userId: string, channel: string) => Promise<boolean>;
+}
+
+function allowLegacyApiKey(): boolean {
+  return process.env.NODE_ENV === 'test' || process.env.ALLOW_LEGACY_API_KEY === '1';
 }
 
 export class GrvtWebSocketServer {
@@ -70,8 +34,8 @@ export class GrvtWebSocketServer {
   private clients = new Map<WebSocket, ClientState>();
   private heartbeatInterval: NodeJS.Timeout | null = null;
   private readonly apiKey: string;
-  private readonly verifyToken?: (token: string) => { userId: number } | null;
-  private readonly authorizeChannel?: (userId: number, channel: string) => Promise<boolean>;
+  private readonly verifyToken?: (token: string) => { userId: string } | null;
+  private readonly authorizeChannel?: (userId: string, channel: string) => Promise<boolean>;
 
   constructor(httpServer: HttpServer, optsOrApiKey: WsServerOptions | string) {
     const opts: WsServerOptions =
@@ -91,7 +55,6 @@ export class GrvtWebSocketServer {
     this.wss.on('connection', (ws, req) => this.onConnection(ws, req));
     this.wss.on('error', (err) => log.error({ err }, 'wss error'));
 
-    // Heartbeat: ping every 30s, terminate stragglers.
     this.heartbeatInterval = setInterval(() => this.heartbeat(), 30_000);
     this.heartbeatInterval.unref?.();
 
@@ -99,38 +62,74 @@ export class GrvtWebSocketServer {
   }
 
   private onConnection(ws: WebSocket, req: IncomingMessage): void {
-    // Auth via query string. Browsers can't set custom headers on the
-    // WS handshake, so the credential rides in the URL.
-    //   ?token=<jwt>     → multi-tenant user, ownership-checked
-    //   ?api_key=<key>   → legacy operator/admin, full access
-    // The credential never appears in URL bars / logs since the dashboard
-    // runs on localhost or behind TLS.
     const url = new URL(req.url ?? '/ws', `http://${req.headers.host}`);
-    const providedToken = url.searchParams.get('token');
-    const providedKey = url.searchParams.get('api_key');
-
-    let userId: number | null = null;
-    if (providedToken && this.verifyToken) {
-      const payload = this.verifyToken(providedToken);
-      if (!payload) {
-        log.warn(
-          { ip: req.socket.remoteAddress },
-          'rejected WS connection: invalid/expired JWT'
-        );
-        ws.close(CLOSE_UNAUTHORIZED, 'unauthorized');
-        return;
-      }
-      userId = payload.userId;
-    } else if (providedKey && providedKey === this.apiKey) {
-      // Legacy operator connection — keeps existing scripts / admin
-      // tools working. userId stays null and bypasses ownership checks.
-      userId = null;
-    } else {
-      log.warn({ ip: req.socket.remoteAddress }, 'rejected unauthenticated WS connection');
+    if (url.searchParams.has('token') || url.searchParams.has('api_key')) {
+      log.warn({ ip: req.socket.remoteAddress }, 'rejected WS connection: credentials in query string');
       ws.close(CLOSE_UNAUTHORIZED, 'unauthorized');
       return;
     }
 
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      log.warn({ ip: req.socket.remoteAddress }, 'rejected WS connection: auth timeout');
+      ws.close(CLOSE_UNAUTHORIZED, 'unauthorized');
+    }, AUTH_TIMEOUT_MS);
+    timer.unref?.();
+
+    const onAuth = (raw: RawData) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      ws.off('message', onAuth);
+
+      let msg: { type?: string; token?: string; apiKey?: string };
+      try {
+        msg = JSON.parse(raw.toString());
+      } catch {
+        ws.close(CLOSE_BAD_REQUEST, 'invalid JSON');
+        return;
+      }
+
+      if (msg.type !== 'auth') {
+        log.warn({ ip: req.socket.remoteAddress }, 'rejected WS connection: first frame was not auth');
+        ws.close(CLOSE_UNAUTHORIZED, 'unauthorized');
+        return;
+      }
+
+      let userId: string | null = null;
+      if (msg.token && this.verifyToken) {
+        const payload = this.verifyToken(msg.token);
+        if (!payload) {
+          log.warn({ ip: req.socket.remoteAddress }, 'rejected WS connection: invalid/expired JWT');
+          ws.close(CLOSE_UNAUTHORIZED, 'unauthorized');
+          return;
+        }
+        userId = payload.userId;
+      } else if (
+        allowLegacyApiKey() &&
+        msg.apiKey &&
+        msg.apiKey === this.apiKey
+      ) {
+        userId = null;
+      } else {
+        log.warn({ ip: req.socket.remoteAddress }, 'rejected unauthenticated WS connection');
+        ws.close(CLOSE_UNAUTHORIZED, 'unauthorized');
+        return;
+      }
+
+      this.completeConnection(ws, userId);
+    };
+
+    ws.on('message', onAuth);
+    ws.on('close', () => {
+      settled = true;
+      clearTimeout(timer);
+    });
+  }
+
+  private completeConnection(ws: WebSocket, userId: string | null): void {
     const id = randomUUID();
     const state: ClientState = {
       id,
@@ -148,7 +147,6 @@ export class GrvtWebSocketServer {
     ws.on('close', (code, reason) => this.onClose(state, code, reason.toString()));
     ws.on('error', (err) => log.error({ err, clientId: id }, 'client ws error'));
 
-    // Server hello
     this.send(ws, {
       type: 'hello',
       channel: 'system',
@@ -172,13 +170,10 @@ export class GrvtWebSocketServer {
     }
 
     switch (msg.type) {
+      case 'auth':
+        break;
       case 'subscribe': {
-        // { type: 'subscribe', channels: ['bot:42', 'prices'] }
         const channels = Array.isArray(msg.channels) ? msg.channels : [];
-        // Authorize every channel *before* wiring up bus subscriptions, so
-        // a foreign bot never gets a teardown registered. Returning early
-        // here is fine — we never await inside a `case` block, but a
-        // fire-and-forget IIFE lets us keep the synchronous switch shape.
         void (async () => {
           const accepted: string[] = [];
           const rejected: string[] = [];
@@ -188,10 +183,6 @@ export class GrvtWebSocketServer {
               accepted.push(channel);
               continue;
             }
-            // Per-user gating: JWT clients (userId !== null) must own
-            // `bot:<id>` channels. Operator (api_key, userId === null)
-            // bypasses. Non-bot channels (`prices`, `notifications`) are
-            // unrestricted broadcast feeds.
             if (state.userId !== null && this.authorizeChannel) {
               const ok = await this.authorizeChannel(state.userId, channel).catch((err) => {
                 log.error({ err, channel, userId: state.userId }, 'authorizeChannel threw');
@@ -241,8 +232,6 @@ export class GrvtWebSocketServer {
       }
 
       case 'ping':
-        // App-level ping (the protocol-level pong from the WS lib doesn't
-        // give us a place to put a payload). Just echo back.
         this.send(state.ws, {
           type: 'pong',
           channel: 'system',
@@ -258,7 +247,6 @@ export class GrvtWebSocketServer {
 
   private onClose(state: ClientState, code: number, reason: string): void {
     log.info({ clientId: state.id, code, reason, total: this.clients.size - 1 }, 'client disconnected');
-    // Tear down all bus subscriptions
     for (const teardown of state.unsubscribers.values()) teardown();
     state.unsubscribers.clear();
     this.clients.delete(state.ws);
@@ -273,10 +261,6 @@ export class GrvtWebSocketServer {
     }
   }
 
-  /**
-   * Heartbeat ticker — pings each client; if a client didn't pong since the
-   * last tick, terminate it. Frees up subscriptions for dead browser tabs.
-   */
   private heartbeat(): void {
     for (const [ws, state] of this.clients) {
       if (!state.isAlive) {
@@ -293,17 +277,10 @@ export class GrvtWebSocketServer {
     }
   }
 
-  /**
-   * Number of currently-connected clients (for /api/health).
-   */
   clientCount(): number {
     return this.clients.size;
   }
 
-  /**
-   * Graceful shutdown — close all client connections cleanly.
-   * Called from the SIGTERM handler.
-   */
   async close(): Promise<void> {
     if (this.heartbeatInterval) {
       clearInterval(this.heartbeatInterval);

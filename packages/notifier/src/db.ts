@@ -30,10 +30,7 @@ export interface BotRow {
   alert_drawdown_pct?: number | null;
   alert_fill_batch?: number | null;
   alert_liq_proximity_pct?: number | null;
-  // SECURITY: every alert is owner-tagged with this user_id so the bot
-  // API can filter alert history per JWT-authed user. NULL on legacy
-  // pre-multi-tenant rows; the bot router treats NULL as user 1.
-  user_id?: number | null;
+  user_id?: string | null;
 }
 
 export interface RoundtripRow {
@@ -41,7 +38,7 @@ export interface RoundtripRow {
   bot_id: number;
   // user_id of the bot that produced this roundtrip — joined in so
   // per-user fill batching can be done without an extra lookup.
-  user_id: number | null;
+  user_id: string | null;
   buy_price: number;
   sell_price: number;
   size: number;
@@ -161,7 +158,7 @@ export class NotifierDb {
     return row?.eq ?? 0;
   }
 
-  async getUserEmail(userId: number): Promise<string | null> {
+  async getUserEmail(userId: string): Promise<string | null> {
     const row = await this.get<{ email: string }>(
       `SELECT email FROM users WHERE id = ?`,
       [userId]

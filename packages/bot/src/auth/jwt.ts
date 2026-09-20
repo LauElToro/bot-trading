@@ -6,6 +6,7 @@
 
 import { createHash } from 'node:crypto';
 import jwt from 'jsonwebtoken';
+import { isUserId, type UserId } from './user-id.js';
 
 const ISSUER = 'grvt-grid';
 const DEFAULT_ACCESS_TTL = 2 * 60 * 60; // 2h
@@ -41,7 +42,7 @@ export function refreshTtlSeconds(): number {
 }
 
 export interface JwtPayload {
-  userId: number;
+  userId: UserId;
 }
 
 export interface TokenPair {
@@ -50,7 +51,7 @@ export interface TokenPair {
   expiresIn: number;
 }
 
-export function signAccessToken(userId: number): string {
+export function signAccessToken(userId: UserId): string {
   return jwt.sign({ userId, typ: 'access' }, getAccessSecret(), {
     algorithm: 'HS256',
     issuer: ISSUER,
@@ -59,11 +60,11 @@ export function signAccessToken(userId: number): string {
 }
 
 /** @deprecated Use signAccessToken. Kept so existing callers/tests keep compiling. */
-export function signToken(userId: number): string {
+export function signToken(userId: UserId): string {
   return signAccessToken(userId);
 }
 
-export function signRefreshToken(userId: number): string {
+export function signRefreshToken(userId: UserId): string {
   return jwt.sign({ userId, typ: 'refresh' }, getRefreshSecret(), {
     algorithm: 'HS256',
     issuer: ISSUER,
@@ -71,7 +72,7 @@ export function signRefreshToken(userId: number): string {
   });
 }
 
-export function signTokenPair(userId: number): TokenPair {
+export function signTokenPair(userId: UserId): TokenPair {
   return {
     accessToken: signAccessToken(userId),
     refreshToken: signRefreshToken(userId),
@@ -88,7 +89,8 @@ export function verifyToken(token: string): JwtPayload | null {
     if (typeof decoded === 'object' && decoded !== null && 'userId' in decoded) {
       const typ = (decoded as { typ?: string }).typ;
       if (typ && typ !== 'access') return null;
-      return { userId: (decoded as { userId: number }).userId };
+      const userId = (decoded as { userId?: unknown }).userId;
+      return isUserId(userId) ? { userId } : null;
     }
     return null;
   } catch {
@@ -108,7 +110,8 @@ export function verifyRefreshToken(token: string): JwtPayload | null {
       'userId' in decoded &&
       (decoded as { typ?: string }).typ === 'refresh'
     ) {
-      return { userId: (decoded as { userId: number }).userId };
+      const userId = (decoded as { userId?: unknown }).userId;
+      return isUserId(userId) ? { userId } : null;
     }
     return null;
   } catch {

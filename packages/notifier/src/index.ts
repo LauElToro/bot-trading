@@ -53,7 +53,7 @@ interface NotifierConfig {
   // the webhook (for the dashboard /api/v2/alerts feed). Per-user
   // Telegram chat IDs are future work.
   // Default 1 = the operator (matching v2-router's COALESCE policy).
-  operatorUserId: number;
+  operatorUserId: string;
 }
 
 function loadConfig(): NotifierConfig {
@@ -71,7 +71,7 @@ function loadConfig(): NotifierConfig {
     webhookSecret: process.env.WEBHOOK_SECRET,
     mutedHoursStart: parseInt(process.env.MUTED_HOURS_START_UTC ?? '-1', 10),
     mutedHoursEnd: parseInt(process.env.MUTED_HOURS_END_UTC ?? '-1', 10),
-    operatorUserId: parseInt(process.env.OPERATOR_USER_ID ?? '1', 10),
+    operatorUserId: (process.env.OPERATOR_USER_ID ?? '').trim(),
   };
 }
 
@@ -133,7 +133,7 @@ class Notifier {
     text: string,
     event: {
       type: string;
-      userId: number;
+      userId: string;
       botId?: number;
       pair?: string;
       data?: Record<string, unknown>;
@@ -153,7 +153,7 @@ class Notifier {
     const tasks: Promise<unknown>[] = [
       this.webhook.send({ ...event, message: text }),
     ];
-    if (event.userId === this.cfg.operatorUserId) {
+    if (this.cfg.operatorUserId && event.userId === this.cfg.operatorUserId) {
       tasks.push(this.telegram.send(text));
     }
     tasks.push(
@@ -165,13 +165,8 @@ class Notifier {
     await Promise.allSettled(tasks);
   }
 
-  /**
-   * Helper — every per-bot alert needs to be attributed to a user.
-   * Legacy rows with NULL user_id are owned by user 1 (the operator),
-   * matching the v2-router COALESCE policy.
-   */
-  private ownerOf(bot: BotRow): number {
-    return bot.user_id ?? 1;
+  private ownerOf(bot: BotRow): string | null {
+    return bot.user_id ?? null;
   }
 
   async start(): Promise<void> {
@@ -195,18 +190,20 @@ class Notifier {
       const newCursors: Record<string, number> = {};
       // Initialize a cursor for every known user (operator + any signed-up users)
       for (const b of bots) {
-        const uid = String(this.ownerOf(b));
+        const uid = this.ownerOf(b);
+        if (!uid) continue;
         newCursors[uid] = 0;
       }
-      // Advance each user's cursor past their latest historical roundtrip
       for (const rt of recent) {
-        const uid = String(rt.user_id ?? 1);
+        if (!rt.user_id) continue;
+        const uid = String(rt.user_id);
         const prev = newCursors[uid] ?? 0;
         if (rt.id > prev) newCursors[uid] = rt.id;
       }
       const newHwm: Record<string, number> = {};
       for (const b of bots) {
-        const uid = String(this.ownerOf(b));
+        const uid = this.ownerOf(b);
+        if (!uid) continue;
         newHwm[uid] = (newHwm[uid] ?? 0) + (b.investment_usdt + b.total_pnl_usdt);
       }
       this.state.update({
@@ -305,7 +302,8 @@ class Notifier {
     // Group by owning user, dropping anything already past that user's cursor.
     const byUser = new Map<string, typeof candidates>();
     for (const rt of candidates) {
-      const uid = String(rt.user_id ?? 1);
+      if (!rt.user_id) continue;
+      const uid = String(rt.user_id);
       const userCursor = cursors[uid] ?? 0;
       if (rt.id <= userCursor) continue;
       const arr = byUser.get(uid) ?? [];
@@ -323,7 +321,7 @@ class Notifier {
       const text = fillsTemplate(rts);
       await this.notify(text, {
         type: 'fills',
-        userId: Number(uid),
+        userId: uid,
         data: { count: rts.length, totalProfit: rts.reduce((s, r) => s + r.profit, 0) },
       });
       cursors[uid] = rts[rts.length - 1]!.id;
@@ -340,10 +338,12 @@ class Notifier {
     for (const bot of bots) {
       const previous = lastStatus[String(bot.id)];
       if (previous && previous !== bot.status) {
+        const owner = this.ownerOf(bot);
+        if (!owner) continue;
         const text = statusChangeTemplate(bot, previous, bot.status);
         await this.notify(text, {
           type: 'status_change',
-          userId: this.ownerOf(bot),
+          userId: owner,
           botId: bot.id,
           pair: bot.pair,
           data: { from: previous, to: bot.status },
@@ -373,7 +373,8 @@ class Notifier {
     const equityByUser = new Map<string, number>();
     const botsByUser = new Map<string, BotRow[]>();
     for (const b of bots) {
-      const uid = String(this.ownerOf(b));
+      const uid = this.ownerOf(b);
+      if (!uid) continue;
       equityByUser.set(uid, (equityByUser.get(uid) ?? 0) + (b.investment_usdt + b.total_pnl_usdt));
       const arr = botsByUser.get(uid) ?? [];
       arr.push(b);
@@ -407,7 +408,7 @@ class Notifier {
         const text = drawdownTemplate(equity, hwm, threshold);
         await this.notify(text, {
           type: 'drawdown',
-          userId: Number(uid),
+          userId: uid,
           data: { equity, hwm, dropPct, threshold },
         });
         errorMap[uid] = hash;
@@ -445,7 +446,8 @@ class Notifier {
 
       if (distancePct <= threshold && distancePct > 0) {
         const owner = this.ownerOf(bot);
-        const uid = String(owner);
+        if (!owner) continue;
+        const uid = owner;
         // Dedup: per-user, bot+bucket so the alert re-fires if it gets worse
         const bucket = Math.floor(distancePct / 5);
         const hash = `liq:${bot.id}:${bucket}`;
@@ -485,11 +487,13 @@ class Notifier {
     const activeBots = bots.filter((b) => b.status === 'running');
 
     for (const bot of activeBots) {
+      const owner = this.ownerOf(bot);
+      if (!owner) continue;
       const snapshot = await this.db.getLatestSnapshot(bot.id);
       const yesterday: number | null = snapshot?.equity ?? null;
       await this.notify(dailySummaryTemplate(bot, snapshot, yesterday), {
         type: 'daily_summary',
-        userId: this.ownerOf(bot),
+        userId: owner,
         botId: bot.id,
         pair: bot.pair,
       });

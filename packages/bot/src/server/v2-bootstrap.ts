@@ -119,11 +119,11 @@ export function mountV2(opts: MountV2Options): V2Handles {
       const m = /^bot:(\d+)$/.exec(channel);
       if (!m) return true;
       const botId = parseInt(m[1]!, 10);
-      const row = await new Promise<{ user_id: number | null } | undefined>((resolve) => {
+      const row = await new Promise<{ user_id: string | null } | undefined>((resolve) => {
         db.get(
           `SELECT user_id FROM grid_bots WHERE id = ?`,
           [botId],
-          (err: Error | null, row: { user_id: number | null } | undefined) => {
+          (err: Error | null, row: { user_id: string | null } | undefined) => {
             if (err) {
               log.warn({ err, botId, userId }, 'ws authorizeChannel: db error');
               resolve(undefined);
@@ -133,10 +133,8 @@ export function mountV2(opts: MountV2Options): V2Handles {
           }
         );
       });
-      if (!row) return false;
-      // Legacy NULL user_id rows are owned by user 1 (mirrors router policy).
-      const ownerId = row.user_id ?? 1;
-      return ownerId === userId;
+      if (!row || row.user_id == null) return false;
+      return row.user_id === userId;
     },
   });
 

@@ -1,13 +1,3 @@
-// D.9 — WebSocket server tests.
-// Spins up a real GrvtWebSocketServer on a random localhost port and
-// drives it with a real `ws` client. No mocks for the WS layer — we
-// want the actual handshake, frame parsing, and bus integration paths.
-//
-// Heartbeat: the server's interval is 30s which would be too slow for
-// CI. We don't test the timer firing per se; instead we test the
-// subscription cleanup that happens when a client closes (the same
-// teardown the heartbeat uses).
-
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { createServer, type Server as HttpServer } from 'node:http';
 import { AddressInfo } from 'node:net';
@@ -21,24 +11,22 @@ let httpServer: HttpServer;
 let wss: GrvtWebSocketServer;
 let port: number;
 
-function urlFor(query = `?api_key=${API_KEY}`): string {
+function urlFor(query = ''): string {
   return `ws://127.0.0.1:${port}/ws${query}`;
 }
 
-// Wrapper around a `ws` client that buffers messages from the moment
-// of construction. The naive pattern (attach listener after `await
-// open`) loses messages dispatched between the open event and the
-// next listener attachment — particularly the server's hello frame,
-// which is sent in the same tick as the upgrade. This buffer guarantees
-// every frame is captured.
 class TestClient {
   ws: WebSocket;
   private queue: WsMessage[] = [];
   private waiters: Array<(m: WsMessage) => void> = [];
   closed: { code: number; reason: string } | null = null;
+  private auth: { token?: string; apiKey?: string };
 
-  constructor(query?: string) {
-    this.ws = new WebSocket(urlFor(query));
+  constructor(opts?: { query?: string; token?: string; apiKey?: string; skipAuth?: boolean }) {
+    this.ws = new WebSocket(urlFor(opts?.query ?? ''));
+    this.auth = opts?.skipAuth
+      ? {}
+      : { token: opts?.token, apiKey: opts?.apiKey ?? API_KEY };
     this.ws.on('message', (raw: Buffer) => {
       const m = JSON.parse(raw.toString()) as WsMessage;
       const w = this.waiters.shift();
@@ -51,7 +39,12 @@ class TestClient {
 
   open(): Promise<void> {
     return new Promise((resolve, reject) => {
-      this.ws.once('open', () => resolve());
+      this.ws.once('open', () => {
+        if (this.auth.token || this.auth.apiKey) {
+          this.send({ type: 'auth', ...this.auth });
+        }
+        resolve();
+      });
       this.ws.once('error', (err) => reject(err));
       this.ws.once('close', (code) => {
         if (code !== 1000) reject(new Error(`closed before open: ${code}`));
@@ -94,26 +87,38 @@ afterEach(async () => {
 });
 
 describe('GrvtWebSocketServer (D.9)', () => {
-  it('rejects connection with invalid api_key (close code 4401)', async () => {
-    const ws = new WebSocket(urlFor('?api_key=wrong'));
+  it('rejects connection with credentials in the query string (close code 4401)', async () => {
+    const ws = new WebSocket(urlFor(`?api_key=${API_KEY}`));
     const closed = await nextClose(ws);
     expect(closed.code).toBe(4401);
   });
 
-  it('rejects connection without api_key', async () => {
+  it('rejects connection without an auth frame (close code 4401)', async () => {
     const ws = new WebSocket(urlFor(''));
     const closed = await nextClose(ws);
     expect(closed.code).toBe(4401);
   });
 
-  it('accepts valid api_key and sends a hello frame with clientId', async () => {
+  it('rejects connection with invalid apiKey in auth frame', async () => {
+    const ws = new WebSocket(urlFor(''));
+    const closedP = nextClose(ws);
+    await new Promise<void>((resolve, reject) => {
+      ws.once('open', () => resolve());
+      ws.once('error', reject);
+    });
+    ws.send(JSON.stringify({ type: 'auth', apiKey: 'wrong-key-xxxxxxxx' }));
+    const closed = await closedP;
+    expect(closed.code).toBe(4401);
+  });
+
+  it('accepts valid apiKey auth frame and sends a hello frame with clientId', async () => {
     const c = new TestClient();
     await c.open();
     const hello = await c.next();
     expect(hello.type).toBe('hello');
     expect(hello.channel).toBe('system');
     const data = hello.data as { clientId: string; serverVersion: string; protocolVersion: number };
-    expect(data.clientId).toMatch(/^[0-9a-f-]{36}$/); // UUID
+    expect(data.clientId).toMatch(/^[0-9a-f-]{36}$/);
     expect(data.protocolVersion).toBe(1);
     expect(wss.clientCount()).toBe(1);
     c.close();
@@ -122,7 +127,7 @@ describe('GrvtWebSocketServer (D.9)', () => {
   it('subscribe + publish round-trip: client receives bus events on subscribed channel', async () => {
     const c = new TestClient();
     await c.open();
-    await c.next(); // hello
+    await c.next();
 
     c.send({ type: 'subscribe', channels: ['bot:42'] });
     const ack = await c.next();
@@ -140,12 +145,11 @@ describe('GrvtWebSocketServer (D.9)', () => {
   it('does NOT deliver events for channels the client did not subscribe to', async () => {
     const c = new TestClient();
     await c.open();
-    await c.next(); // hello
+    await c.next();
     c.send({ type: 'subscribe', channels: ['bot:42'] });
-    await c.next(); // ack
+    await c.next();
 
     wsBus.publish('bot:99', 'fill', { price: 999 });
-    // Verify nothing arrived in 100ms — c.next() should time out.
     await expect(c.next(100)).rejects.toThrow(/timeout/);
     c.close();
   });
@@ -153,16 +157,16 @@ describe('GrvtWebSocketServer (D.9)', () => {
   it('unsubscribe stops delivery from that channel', async () => {
     const c = new TestClient();
     await c.open();
-    await c.next(); // hello
+    await c.next();
     c.send({ type: 'subscribe', channels: ['prices'] });
-    await c.next(); // ack
+    await c.next();
 
     wsBus.publish('prices', 'tick', { eth: 2100 });
     const first = await c.next();
     expect(first.data).toEqual({ eth: 2100 });
 
     c.send({ type: 'unsubscribe', channels: ['prices'] });
-    await new Promise((r) => setTimeout(r, 30)); // let server process unsubscribe
+    await new Promise((r) => setTimeout(r, 30));
 
     wsBus.publish('prices', 'tick', { eth: 2200 });
     await expect(c.next(100)).rejects.toThrow(/timeout/);
@@ -172,7 +176,7 @@ describe('GrvtWebSocketServer (D.9)', () => {
   it('responds to app-level ping with pong', async () => {
     const c = new TestClient();
     await c.open();
-    await c.next(); // hello
+    await c.next();
 
     c.send({ type: 'ping' });
     const pong = await c.next();
@@ -181,10 +185,10 @@ describe('GrvtWebSocketServer (D.9)', () => {
     c.close();
   });
 
-  it('closes connection with 4400 on malformed JSON', async () => {
+  it('closes connection with 4400 on malformed JSON after auth', async () => {
     const c = new TestClient();
     await c.open();
-    await c.next(); // hello
+    await c.next();
     c.ws.send('not-json');
     const closed = await nextClose(c.ws);
     expect(closed.code).toBe(4400);
@@ -193,14 +197,11 @@ describe('GrvtWebSocketServer (D.9)', () => {
   it('cleans up subscriptions on disconnect (no orphan subscribers in bus)', async () => {
     const c = new TestClient();
     await c.open();
-    await c.next(); // hello
+    await c.next();
     c.send({ type: 'subscribe', channels: ['bot:7', 'prices'] });
-    await c.next(); // ack
+    await c.next();
     expect(wsBus.subscriberCount()).toBe(2);
 
-    // Closing the client must trigger the server-side teardown that
-    // removes both subscriptions from the bus. Otherwise dead browser
-    // tabs accumulate forever.
     const closedP = new Promise<void>((resolve) => c.ws.once('close', () => resolve()));
     c.close();
     await closedP;
@@ -213,47 +214,34 @@ describe('GrvtWebSocketServer (D.9)', () => {
   it('subscribing to the same channel twice is idempotent', async () => {
     const c = new TestClient();
     await c.open();
-    await c.next(); // hello
+    await c.next();
     c.send({ type: 'subscribe', channels: ['bot:1'] });
-    await c.next(); // ack
+    await c.next();
     c.send({ type: 'subscribe', channels: ['bot:1'] });
-    await c.next(); // ack again
-    // Only ONE subscription registered with the bus despite two
-    // subscribe frames — guards against duplicate-broadcast bugs.
+    await c.next();
     expect(wsBus.subscriberCount()).toBe(1);
     c.close();
   });
 });
 
-// SECURITY (C-2): multi-tenant WS auth. A user connecting with a JWT
-// must not be able to subscribe to bot:<id> channels for bots they
-// don't own. The default api_key path (above) bypasses ownership —
-// that's the operator/scripts path. These tests cover the JWT path
-// with a stubbed authorizeChannel callback that mirrors the production
-// DB-backed gate in v2-bootstrap.ts.
 describe('GrvtWebSocketServer — JWT-mode ownership gating (C-2)', () => {
   let jwtServer: GrvtWebSocketServer;
   let jwtHttp: HttpServer;
   let jwtPort: number;
 
-  // Pretend the JWT carries a userId encoded in the token string itself.
-  // Real production uses jsonwebtoken; here we just pull the suffix off
-  // strings shaped "user:<n>". Tokens that don't match the shape return
-  // null (invalid).
-  const verifyToken = (token: string): { userId: number } | null => {
+  const verifyToken = (token: string): { userId: string } | null => {
     const m = /^user:(\d+)$/.exec(token);
     if (!m) return null;
-    return { userId: parseInt(m[1]!, 10) };
+    return { userId: m[1]! };
   };
 
-  // Bots: 1 owned by user 1, 2 owned by user 2.
-  const authorizeChannel = async (userId: number, channel: string): Promise<boolean> => {
+  const authorizeChannel = async (userId: string, channel: string): Promise<boolean> => {
     const m = /^bot:(\d+)$/.exec(channel);
-    if (!m) return true; // non-bot channels broadcast freely
+    if (!m) return true;
     const botId = parseInt(m[1]!, 10);
-    if (botId === 1) return userId === 1;
-    if (botId === 2) return userId === 2;
-    return false; // unknown bot → reject
+    if (botId === 1) return userId === '1';
+    if (botId === 2) return userId === '2';
+    return false;
   };
 
   beforeEach(async () => {
@@ -274,40 +262,49 @@ describe('GrvtWebSocketServer — JWT-mode ownership gating (C-2)', () => {
     wsBus.clear();
   });
 
-  function jwtUrl(token: string): string {
-    return `ws://127.0.0.1:${jwtPort}/ws?token=${token}`;
+  function jwtUrl(): string {
+    return `ws://127.0.0.1:${jwtPort}/ws`;
   }
 
-  it('rejects connection with invalid JWT (close 4401)', async () => {
-    const ws = new WebSocket(jwtUrl('garbage'));
-    const closed = await nextClose(ws);
-    expect(closed.code).toBe(4401);
-  });
-
-  it('accepts connection with valid JWT', async () => {
-    const ws = new WebSocket(jwtUrl('user:1'));
-    const helloP = new Promise<unknown>((resolve, reject) => {
-      ws.once('message', (raw: Buffer) => resolve(JSON.parse(raw.toString())));
-      ws.once('error', reject);
-    });
-    await new Promise<void>((resolve, reject) => {
-      ws.once('open', () => resolve());
-      ws.once('error', reject);
-    });
-    const hello = (await helloP) as { type: string };
-    expect(hello.type).toBe('hello');
-    ws.close();
-  });
-
-  it('rejects bot:<id> subscription when user does not own the bot', async () => {
-    const ws = new WebSocket(jwtUrl('user:1'));
+  async function openAuthed(token: string): Promise<{ ws: WebSocket; queue: WsMessage[] }> {
+    const ws = new WebSocket(jwtUrl());
     const queue: WsMessage[] = [];
     ws.on('message', (raw: Buffer) => queue.push(JSON.parse(raw.toString()) as WsMessage));
     await new Promise<void>((resolve, reject) => {
       ws.once('open', () => resolve());
       ws.once('error', reject);
     });
-    // Wait for hello + then send subscribe
+    ws.send(JSON.stringify({ type: 'auth', token }));
+    return { ws, queue };
+  }
+
+  it('rejects connection with invalid JWT (close 4401)', async () => {
+    const ws = new WebSocket(jwtUrl());
+    const closedP = nextClose(ws);
+    await new Promise<void>((resolve, reject) => {
+      ws.once('open', () => resolve());
+      ws.once('error', reject);
+    });
+    ws.send(JSON.stringify({ type: 'auth', token: 'garbage' }));
+    const closed = await closedP;
+    expect(closed.code).toBe(4401);
+  });
+
+  it('rejects JWT in the query string even if valid (close 4401)', async () => {
+    const ws = new WebSocket(`${jwtUrl()}?token=user:1`);
+    const closed = await nextClose(ws);
+    expect(closed.code).toBe(4401);
+  });
+
+  it('accepts connection with valid JWT auth frame', async () => {
+    const { ws, queue } = await openAuthed('user:1');
+    await new Promise((r) => setTimeout(r, 30));
+    expect(queue[0]?.type).toBe('hello');
+    ws.close();
+  });
+
+  it('rejects bot:<id> subscription when user does not own the bot', async () => {
+    const { ws, queue } = await openAuthed('user:1');
     await new Promise((r) => setTimeout(r, 30));
     ws.send(JSON.stringify({ type: 'subscribe', channels: ['bot:2'] }));
     await new Promise((r) => setTimeout(r, 50));
@@ -318,20 +315,12 @@ describe('GrvtWebSocketServer — JWT-mode ownership gating (C-2)', () => {
     expect(ack).toBeDefined();
     expect(ack!.data.channels).toEqual([]);
     expect(ack!.data.rejected).toEqual(['bot:2']);
-    // Nothing wired up on the bus — even if someone publishes to bot:2,
-    // this client must not receive it.
     expect(wsBus.subscriberCount()).toBe(0);
     ws.close();
   });
 
   it('accepts bot:<id> subscription when the user owns the bot', async () => {
-    const ws = new WebSocket(jwtUrl('user:1'));
-    const queue: WsMessage[] = [];
-    ws.on('message', (raw: Buffer) => queue.push(JSON.parse(raw.toString()) as WsMessage));
-    await new Promise<void>((resolve, reject) => {
-      ws.once('open', () => resolve());
-      ws.once('error', reject);
-    });
+    const { ws, queue } = await openAuthed('user:1');
     await new Promise((r) => setTimeout(r, 30));
     ws.send(JSON.stringify({ type: 'subscribe', channels: ['bot:1'] }));
     await new Promise((r) => setTimeout(r, 50));
@@ -343,7 +332,6 @@ describe('GrvtWebSocketServer — JWT-mode ownership gating (C-2)', () => {
     expect(ack!.data.channels).toEqual(['bot:1']);
     expect(ack!.data.rejected).toBeUndefined();
 
-    // Confirm bus events for this channel reach the client.
     wsBus.publish('bot:1', 'fill', { price: 100 });
     await new Promise((r) => setTimeout(r, 30));
     const fill = queue.find((m) => m.channel === 'bot:1' && m.type === 'fill');
@@ -352,13 +340,7 @@ describe('GrvtWebSocketServer — JWT-mode ownership gating (C-2)', () => {
   });
 
   it('mixed subscribe: owned bot accepted, foreign bot rejected, non-bot channel broadcast', async () => {
-    const ws = new WebSocket(jwtUrl('user:1'));
-    const queue: WsMessage[] = [];
-    ws.on('message', (raw: Buffer) => queue.push(JSON.parse(raw.toString()) as WsMessage));
-    await new Promise<void>((resolve, reject) => {
-      ws.once('open', () => resolve());
-      ws.once('error', reject);
-    });
+    const { ws, queue } = await openAuthed('user:1');
     await new Promise((r) => setTimeout(r, 30));
     ws.send(JSON.stringify({ type: 'subscribe', channels: ['bot:1', 'bot:2', 'prices'] }));
     await new Promise((r) => setTimeout(r, 50));

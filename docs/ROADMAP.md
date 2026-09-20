@@ -21,10 +21,10 @@ All 10/10 deployed. Structured logging (pino), per-user GRVT clients, liquidatio
 - D.1, D.4-D.9 still pending (see below).
 
 ### Phase E — Dashboard Polish ✅
-E.1-E.9 done. E.9 (password recovery) ships SMTP-based reset with optional config — if SMTP env vars are blank, reset URL is logged at WARN for out-of-band delivery so self-host without SMTP still works.
+E.1-E.9 done. E.9 (password recovery) ships SMTP-based reset. If SMTP is unset the request still returns 200 (enumeration-safe) and does not log the reset URL.
 
-### Phase F — Notifications & Alerting ✅ (5/6)
-F.1-F.4 + F.6 deployed: per-bot thresholds, liq proximity, webhook sink, muted hours, alert history. **F.5 (email) skipped — Telegram is sufficient for current users**.
+### Phase F — Notifications & Alerting ✅ (6/6)
+F.1-F.6 deployed: per-bot thresholds, liq proximity, webhook sink, muted hours, alert history, and email (`notifier/src/email.ts` + SMTP env).
 
 ### Phase G — Operations & Monitoring ✅
 All 6/6 deployed: Prometheus metrics, Grafana template, automated backups, rollback docs, log rotation, connection-loss docs.

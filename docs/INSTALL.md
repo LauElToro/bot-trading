@@ -35,10 +35,11 @@ The installer will:
 4. Build the Docker images
 5. Start the stack
 6. Wait for the bot's health check to pass
-7. Print the dashboard URL and API key
+7. Print the dashboard URL
 
-When it's done, open the printed URL, enter the API key when prompted by
-the dashboard, and your bot will appear in the Overview.
+When it's done, open the printed URL and sign in with `OWNER_EMAIL` /
+`OWNER_INITIAL_PASSWORD` (or create an account if signup is enabled).
+Then connect your GRVT credentials from the onboarding screen.
 
 ## Manual install (if you want to skip the installer)
 
@@ -181,8 +182,8 @@ Before you point a domain at this and walk away:
 - [ ] Your server's firewall blocks port 3848 from the public internet (Caddy
       proxies via the docker network — only 80/443 should be public)
 - [ ] You've set up nightly backups of `./data/`
-- [ ] You're not running the legacy basic auth dashboard (just remove
-      `DASHBOARD_USER` / `DASHBOARD_PASS` from `.env` if you don't need it)
+- [ ] Signup is disabled on private deploys (`SIGNUP_DISABLED=1`) unless
+      you intend to host multiple tenants
 - [ ] Your GRVT API key is scoped to the trading sub-account only — not the
       master account with withdrawal permissions
 

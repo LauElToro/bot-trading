@@ -1,16 +1,3 @@
-// V2 REST router. New endpoints for the Ultra Dashboard.
-//
-// These do NOT replace the legacy /api/* endpoints in src/dashboard/server.ts
-// — those keep working unchanged. v2 lives at /api/v2/* and is the surface
-// the new React dashboard talks to.
-//
-// Auth: every v2 endpoint requires the X-Api-Key header (matching
-// process.env.DASHBOARD_API_KEY). The legacy basic-auth endpoints stay as-is
-// for backward compat with the current HTML dashboard.
-//
-// Caching: hot endpoints (instruments, balance, prices) go through the
-// shared TtlCache so dashboard polls don't hammer GRVT.
-
 import { Router, type Request, type Response, type NextFunction } from 'express';
 import rateLimit from 'express-rate-limit';
 import type Database from 'sqlite3';
@@ -34,13 +21,16 @@ import {
 } from '../mail/mailer.js';
 import { verifyGoogleIdToken, isGoogleAuthConfigured } from '../auth/google.js';
 import { GRVTClient, type GrvtClientCreds } from '../api/client.js';
-import { invalidateGrvtClient } from '../api/grvt-client-factory.js';
+import {
+  invalidateGrvtClient,
+  getGrvtClientForUser,
+  getGrvtClientForBot,
+} from '../api/grvt-client-factory.js';
+import { TEST_OPERATOR_USER_ID, type UserId } from '../auth/user-id.js';
 
-// Augment Express Request to carry the authenticated user id set
-// by the JWT middleware. Every protected handler reads req.userId.
 declare module 'express-serve-static-core' {
   interface Request {
-    userId?: number;
+    userId?: UserId;
   }
 }
 
@@ -69,7 +59,7 @@ interface GrvtClient {
 // We don't import GridEngine directly to keep this layer free of cycles.
 interface EngineOps {
   createBot(config: {
-    userId: number;
+    userId: UserId;
     pair: string;
     direction: 'long' | 'short';
     leverage: number;
@@ -96,7 +86,7 @@ interface EngineOps {
   // refreshes ALL bots owned by the user (default-creds rotation).
   // With subAccountId provided it only refreshes bots routed through
   // that specific sub-account.
-  rebindGrvtClient?(userId: number, subAccountId?: number | null): Promise<void>;
+  rebindGrvtClient?(userId: UserId, subAccountId?: number | null): Promise<void>;
 }
 
 export interface V2RouterDeps {
@@ -149,37 +139,47 @@ function dbRun(
 
 // ─── Auth middleware ───────────────────────────────────────────────────
 // Multi-tenant: prefers JWT in Authorization header. Falls back to
-// the legacy X-Api-Key header (which assumes admin user_id=1) for
-// backward compatibility with scripts and the migration window.
-// Either way, sets req.userId so downstream handlers can scope.
-function makeAuthMiddleware(apiKey: string) {
+// the legacy X-Api-Key header (first admin UUIDv4) when allowed.
+function allowLegacyApiKey(): boolean {
+  return process.env.NODE_ENV === 'test' || process.env.ALLOW_LEGACY_API_KEY === '1';
+}
+
+function makeAuthMiddleware(apiKey: string, gridBotDb: GridBotDB) {
   return (req: Request, res: Response, next: NextFunction) => {
-    // Try JWT first.
-    const authHeader = req.header('authorization') || '';
-    const m = /^Bearer (.+)$/.exec(authHeader);
-    if (m) {
-      const payload = verifyToken(m[1]!);
-      if (payload) {
-        req.userId = payload.userId;
-        return next();
+    void (async () => {
+      const authHeader = req.header('authorization') || '';
+      const m = /^Bearer (.+)$/.exec(authHeader);
+      if (m) {
+        const payload = verifyToken(m[1]!);
+        if (payload) {
+          req.userId = payload.userId;
+          return next();
+        }
+        log.warn({ ip: req.ip, path: req.path }, 'rejected v2 request: invalid/expired JWT');
+        return res.status(401).json({ error: 'invalid or expired token' });
       }
-      // Bearer present but invalid — fail fast, don't fall through.
-      log.warn({ ip: req.ip, path: req.path }, 'rejected v2 request: invalid/expired JWT');
-      return res.status(401).json({ error: 'invalid or expired token' });
-    }
 
-    // Legacy API key fallback. Assumes admin owner = user 1.
-    const provided = req.header('x-api-key');
-    if (provided && provided === apiKey) {
-      req.userId = 1;
-      return next();
-    }
+      const provided = req.header('x-api-key');
+      if (allowLegacyApiKey() && provided && provided === apiKey) {
+        const adminId = await gridBotDb.getFirstAdminUserId?.();
+        if (adminId) {
+          req.userId = adminId;
+          return next();
+        }
+        if (process.env.NODE_ENV === 'test') {
+          req.userId = TEST_OPERATOR_USER_ID;
+          return next();
+        }
+        log.warn({ ip: req.ip, path: req.path }, 'rejected X-Api-Key: no admin user');
+        return res.status(401).json({ error: 'unauthorized' });
+      }
 
-    log.warn({ ip: req.ip, path: req.path }, 'rejected unauthenticated v2 request');
-    return res.status(401).json({
-      error: 'unauthorized',
-      hint: 'send Authorization: Bearer <jwt> or X-Api-Key (legacy)',
-    });
+      log.warn({ ip: req.ip, path: req.path }, 'rejected unauthenticated v2 request');
+      return res.status(401).json({
+        error: 'unauthorized',
+        hint: 'send Authorization: Bearer <jwt>',
+      });
+    })().catch(next);
   };
 }
 
@@ -189,9 +189,9 @@ function makeAuthMiddleware(apiKey: string) {
 async function requireBotOwnership(
   db: Database.Database,
   botId: number,
-  userId: number
-): Promise<{ id: number; user_id: number | null; pair: string; status: string }> {
-  const row = await dbGet<{ id: number; user_id: number | null; pair: string; status: string }>(
+  userId: UserId
+): Promise<{ id: number; user_id: UserId | null; pair: string; status: string }> {
+  const row = await dbGet<{ id: number; user_id: UserId | null; pair: string; status: string }>(
     db,
     `SELECT id, user_id, pair, status FROM grid_bots WHERE id = ?`,
     [botId]
@@ -201,10 +201,7 @@ async function requireBotOwnership(
     e.status = 404;
     throw e;
   }
-  // Legacy rows with NULL user_id are treated as owned by user 1
-  // (the owner) since the migration backfill targets user 1.
-  const ownerId = row.user_id ?? 1;
-  if (ownerId !== userId) {
+  if (row.user_id == null || row.user_id !== userId) {
     const e = new Error('forbidden') as Error & { status?: number };
     e.status = 403;
     throw e;
@@ -257,7 +254,7 @@ function respondLifecycleError(
   err: unknown,
   defaultErrorCode: string,
   gridBotDb: GridBotDB,
-  userId: number,
+  userId: UserId,
 ): void {
   const message = err instanceof Error ? err.message : String(err);
   if (/GRVT login failed/i.test(message)) {
@@ -284,7 +281,7 @@ function respondLifecycleError(
 
 async function issueSession(
   gridBotDb: GridBotDB,
-  userId: number,
+  userId: UserId,
   isAdmin: boolean,
   hasGrvtCreds: boolean
 ) {
@@ -471,8 +468,10 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
     return String(raw ?? '').toLowerCase() === 'es' ? 'es' : 'en';
   }
 
-  // POST /api/v2/auth/signup — public.
   router.post('/auth/signup', SIGNUP_LIMITER, asyncHandler(async (req, res) => {
+    if (process.env.SIGNUP_DISABLED === '1') {
+      return res.status(403).json({ error: 'signup_disabled' });
+    }
     const body = (req.body ?? {}) as {
       email?: unknown;
       password?: unknown;
@@ -592,6 +591,9 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
     }
 
     if (!user) {
+      if (process.env.SIGNUP_DISABLED === '1') {
+        return res.status(403).json({ error: 'signup_disabled' });
+      }
       const accepted = body.accepted_terms === true || body.accepted_terms === 'true';
       if (!accepted) {
         return res.status(409).json({
@@ -763,7 +765,7 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
       // Don't fail the request — user already sees a generic OK and
       // the token row is in the DB. Log with the URL so an admin can
       // recover by hand if the SMTP transport is broken.
-      log.error({ err, userId: user.id, resetUrl }, 'password reset email failed');
+      log.error({ err, userId: user.id }, 'password reset email failed');
     }
     log.info({ userId: user.id, mailerConfigured: isMailerConfigured() }, 'password reset issued');
     res.json({ ok: true });
@@ -796,24 +798,12 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
     return;
   }));
 
-  // ── GET /api/v2/metrics ────────────────────────────────────────────
-  // G.1: Prometheus-compatible text metrics. Sits BEFORE the JWT auth
-  // middleware so scrapers don't need a user token, but is NOT public:
-  // it exposes per-bot equity/PnL/position with bot_id+pair labels, which
-  // would leak every user's portfolio if scrapeable from the internet.
-  //
-  // Gate (in order):
-  //   1. If METRICS_TOKEN is set → require it via `Authorization: Bearer
-  //      <token>` or `?token=<token>`.
-  //   2. Else → only allow localhost (127.0.0.1 / ::1). External
-  //      requests get 401 with a hint.
   router.get('/metrics', (req: Request, res: Response, next: NextFunction) => {
     const required = process.env.METRICS_TOKEN?.trim();
     if (required && required.length >= 16) {
       const header = req.header('authorization') || '';
       const bearer = /^Bearer\s+(.+)$/i.exec(header)?.[1];
-      const provided = bearer ?? (typeof req.query.token === 'string' ? req.query.token : undefined);
-      if (provided && provided === required) return next();
+      if (bearer && bearer === required) return next();
       log.warn({ ip: req.ip, path: req.path }, 'rejected /metrics request: missing/invalid token');
       res.status(401).json({ error: 'unauthorized' });
       return;
@@ -900,7 +890,7 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
   // ─── Protected endpoints below this line ───────────────────────
   // All endpoints below require either Bearer JWT (preferred) or
   // legacy X-Api-Key header (admin/scripts).
-  router.use(makeAuthMiddleware(apiKey));
+  router.use(makeAuthMiddleware(apiKey, gridBotDb));
 
   // ── GET /api/v2/auth/me ────────────────────────────────────────
   // Returns the authenticated user's profile + whether they have
@@ -1242,9 +1232,8 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
   // ── GET /api/v2/bots ──────────────────────────────────────────────
   // List all bots with the fields the dashboard cares about.
   router.get('/bots', asyncHandler(async (req, res) => {
-    // Multi-tenant: list only the bots owned by this user. Legacy
-    // rows with NULL user_id are treated as user 1's so they keep
-    // showing up after the migration.
+    // Multi-tenant: list only the bots owned by this user. NULL
+    // user_id rows are unowned and stay hidden.
     const userId = req.userId!;
     const rows = await dbAll(db, `
       SELECT id, pair, direction, leverage, lower_price, upper_price, num_grids,
@@ -1257,7 +1246,7 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
              safeguard_enabled, safeguard_threshold_pct, safeguard_action,
              grvt_sub_account_id
       FROM grid_bots
-      WHERE COALESCE(user_id, 1) = ?
+      WHERE user_id = ?
       ORDER BY created_at DESC
     `, [userId]);
     res.json({ bots: rows });
@@ -1284,16 +1273,13 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
     if (!Number.isFinite(id)) return res.status(400).json({ error: 'invalid bot id' });
     await requireBotOwnership(db, id, req.userId!);
 
-    const bot = await dbGet<{ pair: string; status: string }>(
+    const bot = await dbGet<{ pair: string; status: string; grvt_sub_account_id: number | null }>(
       db,
-      `SELECT pair, status FROM grid_bots WHERE id = ?`,
+      `SELECT pair, status, grvt_sub_account_id FROM grid_bots WHERE id = ?`,
       [id]
     );
     if (!bot) return res.status(404).json({ error: 'bot not found' });
 
-    // Pull the level rows from the local DB. Grid levels are the source
-    // of truth for what the bot WANTS to be doing. The orders array is what
-    // GRVT actually has.
     const levels = await dbAll(db, `
       SELECT id, level_index, price, side, quantity, is_filled, pending_replace, order_id, state
       FROM grid_levels
@@ -1301,11 +1287,13 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
       ORDER BY level_index
     `, [id]);
 
-    // Live data from GRVT (cached 2s).
+    const sub = bot.grvt_sub_account_id ?? null;
+    const userClient = await getGrvtClientForBot(req.userId!, sub, gridBotDb);
+    const scope = `${req.userId}:${sub ?? 'default'}:${bot.pair}`;
     const [ticker, position, openOrders] = await Promise.all([
-      cache.getOrFetch(`ticker:${bot.pair}`, 2_000, () => grvtClient.getTicker(bot.pair)),
-      cache.getOrFetch(`position:${bot.pair}`, 2_000, () => grvtClient.getPosition(bot.pair)),
-      cache.getOrFetch(`openOrders:${bot.pair}`, 2_000, () => grvtClient.getOpenOrders(bot.pair))
+      cache.getOrFetch(`ticker:${scope}`, 2_000, () => userClient.getTicker(bot.pair)),
+      cache.getOrFetch(`position:${scope}`, 2_000, () => userClient.getPosition(bot.pair)),
+      cache.getOrFetch(`openOrders:${scope}`, 2_000, () => userClient.getOpenOrders(bot.pair))
     ]);
 
     res.json({
@@ -1373,8 +1361,19 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
 
   // ── GET /api/v2/balance ───────────────────────────────────────────
   // Cached 2s.
-  router.get('/balance', asyncHandler(async (_req, res) => {
-    const data = await cache.getOrFetch('balance', 2_000, () => grvtClient.getBalance());
+  router.get('/balance', asyncHandler(async (req, res) => {
+    const userId = req.userId!;
+    let userClient;
+    try {
+      userClient = await getGrvtClientForUser(userId, gridBotDb);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('no GRVT credentials')) {
+        return res.status(409).json({ error: 'grvt_credentials_missing' });
+      }
+      throw err;
+    }
+    const data = await cache.getOrFetch(`balance:${userId}`, 2_000, () => userClient.getBalance());
     res.json({ balance: data });
     return;
   }));
@@ -1416,8 +1415,7 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
     const id = parseInt(String(req.params.id ?? ''), 10);
     if (!Number.isFinite(id)) return res.status(400).json({ error: 'invalid bot id' });
     await requireBotOwnership(db, id, req.userId!);
-    // Multi-tenant: filter by user_id (added in the migration). Legacy
-    // rows with NULL user_id are treated as user 1's.
+    // Multi-tenant: filter by user_id. NULL user_id rows are unowned.
     const userId = req.userId!;
     const limit = Math.min(parseInt(String(req.query.limit ?? '200'), 10) || 200, 1000);
     const offset = Math.max(parseInt(String(req.query.offset ?? '0'), 10) || 0, 0);
@@ -2115,7 +2113,7 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
       const existing = await dbGet<{ c: number }>(
         db,
         `SELECT COUNT(*) as c FROM grid_bots
-         WHERE COALESCE(user_id, 1) = ?
+         WHERE user_id = ?
            AND pair = ?
            AND COALESCE(grvt_sub_account_id, -1) = COALESCE(?, -1)
            AND status IN ('running', 'paused')`,
@@ -2601,7 +2599,7 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
       SELECT id, pair, status, leverage, investment_usdt,
              grid_profit_usdt, trend_pnl_usdt, position_size, avg_entry_price
       FROM grid_bots
-      WHERE COALESCE(user_id, 1) = ? AND status != 'stopped'
+      WHERE user_id = ? AND status != 'stopped'
     `, [userId]);
 
     let totalInvested = 0;
@@ -2656,7 +2654,7 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
       SELECT s.date, SUM(s.equity) AS equity
       FROM daily_snapshots s
       JOIN grid_bots b ON b.id = s.bot_id
-      WHERE COALESCE(b.user_id, 1) = ?
+      WHERE b.user_id = ?
         AND b.status != 'stopped'
         AND s.date >= date('now', ?)
       GROUP BY s.date
@@ -2671,11 +2669,7 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
   // this as a JSON array in its state directory; we read it from the
   // shared data path. Returns newest-first, with optional ?limit.
   //
-  // SECURITY: filtered by userId. Each alert is tagged with the owning
-  // user when the notifier writes it; entries that pre-date the
-  // multi-tenant security fix (and therefore lack a userId) are treated
-  // as owned by user 1 (the operator), matching the v2-router COALESCE
-  // policy elsewhere.
+  // SECURITY: filtered by userId. Alerts without a UUID owner are skipped.
   router.get('/alerts', asyncHandler(async (req, res) => {
     const userId = req.userId!;
     const limit = Math.min(parseInt(String(req.query.limit ?? '100'), 10) || 100, 500);
@@ -2688,8 +2682,8 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
         return;
       }
       const raw = fs.readFileSync(historyPath, 'utf8');
-      const all = JSON.parse(raw) as Array<{ userId?: number } & Record<string, unknown>>;
-      const mine = all.filter((a) => (a.userId ?? 1) === userId);
+      const all = JSON.parse(raw) as Array<{ userId?: string } & Record<string, unknown>>;
+      const mine = all.filter((a) => a.userId === userId);
       const recent = mine.slice(-limit).reverse(); // newest first
       res.json({ alerts: recent });
     } catch (err) {

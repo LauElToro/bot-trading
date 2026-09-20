@@ -1,20 +1,3 @@
-// Singleton WebSocket connection manager.
-//
-// Mirrors the protocol of packages/bot/src/server/ws-server.ts:
-//   - URL: ws[s]://host/ws?token=<jwt>
-//   - Server sends `hello` on connect, `pong` on app-level ping
-//   - Client subscribes to channels via { type: 'subscribe', channels: [...] }
-//   - All frames JSON: { type, channel, data, timestamp }
-//
-// Auth: JWT-only. The legacy `?api_key=` mode was removed because the
-// shared dashboard key was being shipped in the public Vite bundle. Server
-// still accepts `?api_key=` for operator scripts (curl/admin); the browser
-// never does.
-//
-// Reconnection: exponential backoff, capped. The hook layer (use-ws-channel)
-// re-issues subscribe frames after every reconnect so consumers don't have to
-// know about disconnect events.
-
 import { getAuthToken } from './api-client';
 
 export type WsStatus = 'connecting' | 'open' | 'closed' | 'error';
@@ -41,7 +24,7 @@ class WsClient {
   private intentionallyClosed = false;
   private appPingTimer: number | null = null;
 
-  private buildUrl(token: string): string {
+  private buildUrl(): string {
     const baseOverride = import.meta.env.VITE_API_BASE_URL ?? '';
     let wsBase: string;
     if (baseOverride) {
@@ -52,28 +35,17 @@ class WsClient {
     } else {
       wsBase = 'ws://localhost:3848';
     }
-    return `${wsBase}/ws?token=${encodeURIComponent(token)}`;
+    return `${wsBase}/ws`;
   }
 
-  /**
-   * Lazy connect. Safe to call multiple times — only connects once.
-   * No-op if there is no JWT (the user hasn't logged in yet).
-   */
   connect(): void {
     if (this.ws) {
       const state = this.ws.readyState;
-      // OPEN or CONNECTING: already healthy, nothing to do.
       if (state === WebSocket.OPEN || state === WebSocket.CONNECTING) return;
-      // CLOSING or CLOSED: abandon the old socket reference so we can
-      // build a fresh one. Without this, an immediate reconnect after
-      // disconnect() (e.g. login after logout) would bail here while
-      // the old socket finishes its close handshake.
       this.ws = null;
     }
     const token = getAuthToken();
     if (!token) {
-      // Nothing to authenticate with. Stay closed until AuthProvider
-      // calls connect() again after login.
       this.setStatus('closed');
       return;
     }
@@ -81,7 +53,7 @@ class WsClient {
     this.setStatus('connecting');
 
     try {
-      this.ws = new WebSocket(this.buildUrl(token));
+      this.ws = new WebSocket(this.buildUrl());
     } catch (err) {
       console.error('[ws] failed to construct WebSocket', err);
       this.setStatus('error');
@@ -90,16 +62,12 @@ class WsClient {
     }
 
     this.ws.addEventListener('open', () => {
-      this.reconnectAttempt = 0;
-      this.setStatus('open');
-      // Re-subscribe to all known channels after reconnect.
-      const channels = Array.from(this.channelListeners.keys());
-      if (channels.length > 0) {
-        this.send({ type: 'subscribe', channels });
+      const liveToken = getAuthToken();
+      if (!liveToken) {
+        this.ws?.close(1000, 'no token');
+        return;
       }
-      // App-level ping every 25s to keep things lively (the server also
-      // does protocol-level pings every 30s; this is belt-and-suspenders).
-      this.startAppPing();
+      this.send({ type: 'auth', token: liveToken });
     });
 
     this.ws.addEventListener('message', (event) => {
@@ -109,6 +77,15 @@ class WsClient {
       } catch {
         console.warn('[ws] received non-JSON frame', event.data);
         return;
+      }
+      if (msg.type === 'hello' && msg.channel === 'system') {
+        this.reconnectAttempt = 0;
+        this.setStatus('open');
+        const channels = Array.from(this.channelListeners.keys());
+        if (channels.length > 0) {
+          this.send({ type: 'subscribe', channels });
+        }
+        this.startAppPing();
       }
       this.dispatch(msg);
     });
@@ -120,7 +97,6 @@ class WsClient {
         this.setStatus('closed');
         return;
       }
-      // 4401 = unauthorized, don't retry blindly
       if (event.code === 4401) {
         console.error('[ws] unauthorized — token rejected by server');
         this.setStatus('error');
@@ -132,14 +108,9 @@ class WsClient {
 
     this.ws.addEventListener('error', (err) => {
       console.warn('[ws] error', err);
-      // The close handler will fire right after — let it handle reconnect.
     });
   }
 
-  /**
-   * Subscribe a listener to a channel. Returns unsubscribe.
-   * Auto-connects if not already connected.
-   */
   subscribe(channel: string, listener: Listener): () => void {
     let listeners = this.channelListeners.get(channel);
     const isFirstSubscriber = !listeners;
@@ -149,11 +120,8 @@ class WsClient {
     }
     listeners.add(listener);
 
-    // Lazy connect on first subscription
     this.connect();
 
-    // If we're already open, send subscribe immediately.
-    // (If not open yet, the open handler will send it on connect.)
     if (isFirstSubscriber && this.status === 'open') {
       this.send({ type: 'subscribe', channels: [channel] });
     }
@@ -173,8 +141,6 @@ class WsClient {
 
   onStatusChange(listener: StatusListener): () => void {
     this.statusListeners.add(listener);
-    // Fire immediately with current status so consumers don't have to
-    // separately read it on mount.
     listener(this.status);
     return () => {
       this.statusListeners.delete(listener);
@@ -185,9 +151,6 @@ class WsClient {
     return this.status;
   }
 
-  /**
-   * Force-close. Used by tests / hot-reload.
-   */
   disconnect(): void {
     this.intentionallyClosed = true;
     if (this.reconnectTimer != null) {
@@ -201,7 +164,6 @@ class WsClient {
   }
 
   private dispatch(msg: WsMessage): void {
-    // System frames (hello, subscribed, pong) — log but no fanout.
     if (msg.channel === 'system') {
       if (msg.type === 'hello') {
         console.info('[ws] hello', msg.data);
@@ -268,5 +230,4 @@ class WsClient {
   }
 }
 
-// Module-level singleton — one WS connection per browser tab.
 export const wsClient = new WsClient();

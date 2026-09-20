@@ -63,6 +63,7 @@ vi.mock('../src/api/client.js', () => ({
 
 vi.mock('../src/api/grvt-client-factory.js', () => ({
   getGrvtClientForUser: vi.fn().mockResolvedValue(mockGrvtClient),
+  getGrvtClientForBot: vi.fn().mockResolvedValue(mockGrvtClient),
   invalidateGrvtClient: vi.fn(),
 }));
 
@@ -81,6 +82,7 @@ vi.mock('../src/server/logger.js', () => ({
 }));
 
 import { computeLiqPriceLocal, GridEngine } from '../src/bot/grid-engine.js';
+import { TEST_OPERATOR_USER_ID } from '../src/auth/user-id.js';
 
 // ── 1. computeLiqPriceLocal ──────────────────────────────────────────
 
@@ -200,7 +202,8 @@ describe('GridEngine.calculateGridLevels', () => {
   });
 
   it('generates numGrids+1 levels with correct spacing', async () => {
-    const result = await engine.calculateGridLevels({
+    const result = await     engine.calculateGridLevels({
+      userId: TEST_OPERATOR_USER_ID,
       pair: 'ETH_USDT_Perp',
       direction: 'long',
       leverage: 2,
@@ -215,7 +218,8 @@ describe('GridEngine.calculateGridLevels', () => {
   });
 
   it('levels below current price are buy, above are sell (LONG)', async () => {
-    const result = await engine.calculateGridLevels({
+    const result = await     engine.calculateGridLevels({
+      userId: TEST_OPERATOR_USER_ID,
       pair: 'ETH_USDT_Perp',
       direction: 'long',
       leverage: 2,
@@ -235,7 +239,8 @@ describe('GridEngine.calculateGridLevels', () => {
   });
 
   it('SHORT direction flips buy/sell assignment', async () => {
-    const result = await engine.calculateGridLevels({
+    const result = await     engine.calculateGridLevels({
+      userId: TEST_OPERATOR_USER_ID,
       pair: 'ETH_USDT_Perp',
       direction: 'short',
       leverage: 2,
@@ -259,7 +264,8 @@ describe('GridEngine.calculateGridLevels', () => {
     // effCap = 500*2*0.75 = 750
     // midPrice = (1800+2400)/2 = 2100
     // qty = ceil((750/10/2100)*100)/100 = ceil(0.03571*100)/100 = ceil(3.571)/100 = 4/100 = 0.04
-    const result = await engine.calculateGridLevels({
+    const result = await     engine.calculateGridLevels({
+      userId: TEST_OPERATOR_USER_ID,
       pair: 'ETH_USDT_Perp',
       direction: 'long',
       leverage: 2,
@@ -277,7 +283,8 @@ describe('GridEngine.calculateGridLevels', () => {
   });
 
   it('all levels have uniform quantity (no drift)', async () => {
-    const result = await engine.calculateGridLevels({
+    const result = await     engine.calculateGridLevels({
+      userId: TEST_OPERATOR_USER_ID,
       pair: 'ETH_USDT_Perp',
       direction: 'long',
       leverage: 5,
@@ -295,8 +302,9 @@ describe('GridEngine.calculateGridLevels', () => {
     mockGrvtClient.getTicker.mockResolvedValue({ last_price: '1500' }); // below range
 
     await expect(
-      engine.calculateGridLevels({
-        pair: 'ETH_USDT_Perp',
+    engine.calculateGridLevels({
+      userId: TEST_OPERATOR_USER_ID,
+      pair: 'ETH_USDT_Perp',
         direction: 'long',
         leverage: 2,
         lowerPrice: 1800,
@@ -308,7 +316,8 @@ describe('GridEngine.calculateGridLevels', () => {
   });
 
   it('qty floors at 0.03 for tiny investments', async () => {
-    const result = await engine.calculateGridLevels({
+    const result = await     engine.calculateGridLevels({
+      userId: TEST_OPERATOR_USER_ID,
       pair: 'ETH_USDT_Perp',
       direction: 'long',
       leverage: 1,
@@ -322,7 +331,8 @@ describe('GridEngine.calculateGridLevels', () => {
   });
 
   it('liquidation price is included in result', async () => {
-    const result = await engine.calculateGridLevels({
+    const result = await     engine.calculateGridLevels({
+      userId: TEST_OPERATOR_USER_ID,
       pair: 'ETH_USDT_Perp',
       direction: 'long',
       leverage: 2,
@@ -336,7 +346,8 @@ describe('GridEngine.calculateGridLevels', () => {
   });
 
   it('estimated profit per grid = spacing * qty', async () => {
-    const result = await engine.calculateGridLevels({
+    const result = await     engine.calculateGridLevels({
+      userId: TEST_OPERATOR_USER_ID,
       pair: 'ETH_USDT_Perp',
       direction: 'long',
       leverage: 2,

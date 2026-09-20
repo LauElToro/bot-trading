@@ -8,14 +8,16 @@ import {
 
 describe('JWT access/refresh pair', () => {
   it('signs an access token that verifyToken accepts and verifyRefreshToken rejects', () => {
-    const pair = signTokenPair(42);
-    expect(verifyToken(pair.accessToken)?.userId).toBe(42);
+    const uid = '11111111-1111-4111-8111-111111111111';
+    const pair = signTokenPair(uid);
+    expect(verifyToken(pair.accessToken)?.userId).toBe(uid);
     expect(verifyRefreshToken(pair.accessToken)).toBeNull();
   });
 
   it('signs a refresh token that verifyRefreshToken accepts and verifyToken rejects', () => {
-    const pair = signTokenPair(42);
-    expect(verifyRefreshToken(pair.refreshToken)?.userId).toBe(42);
+    const uid = '11111111-1111-4111-8111-111111111111';
+    const pair = signTokenPair(uid);
+    expect(verifyRefreshToken(pair.refreshToken)?.userId).toBe(uid);
     expect(verifyToken(pair.refreshToken)).toBeNull();
   });
 

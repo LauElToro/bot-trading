@@ -23,7 +23,7 @@ import {
 import { wsClient } from './ws-client';
 
 export interface AuthUser {
-  id: number;
+  id: string;
   email: string;
   isAdmin: boolean;
   hasGrvtCreds: boolean;

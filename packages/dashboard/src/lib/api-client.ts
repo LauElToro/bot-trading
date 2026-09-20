@@ -76,7 +76,7 @@ interface AuthSession {
   accessToken?: string;
   refreshToken?: string;
   expiresIn?: number;
-  userId: number;
+  userId: string;
   isAdmin: boolean;
   hasGrvtCreds: boolean;
 }
@@ -407,7 +407,7 @@ export const api = {
 
   getMe: () =>
     request<{
-      id: number;
+      id: string;
       email: string;
       isAdmin: boolean;
       hasGrvtCreds: boolean;
