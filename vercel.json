@@ -2,7 +2,7 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": null,
   "installCommand": "npm ci --include=dev --workspace=@grvt-grid/dashboard --include-workspace-root",
-  "buildCommand": "if [ -f packages/dashboard/vercel-build-dashboard.mjs ]; then node packages/dashboard/vercel-build-dashboard.mjs; elif [ -f vercel-build-dashboard.mjs ]; then node vercel-build-dashboard.mjs; else node ../../packages/dashboard/vercel-build-dashboard.mjs; fi",
+  "buildCommand": "node scripts/vercel-build-dashboard.mjs",
   "outputDirectory": "dist",
   "rewrites": [
     { "source": "/((?!assets/).*)", "destination": "/index.html" }
