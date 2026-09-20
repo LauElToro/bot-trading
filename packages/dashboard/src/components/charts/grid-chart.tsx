@@ -33,6 +33,7 @@ import {
 } from 'lightweight-charts';
 import { useEffect, useRef } from 'react';
 import type { Candle, GridLevel } from '@/lib/api-types';
+import { useUiStore } from '@/stores/ui-store';
 
 interface GridChartProps {
   candles: Candle[];
@@ -84,6 +85,7 @@ export function GridChart({
   recentlyFilled,
   className,
 }: GridChartProps) {
+  const theme = useUiStore((state) => state.theme);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
@@ -96,32 +98,36 @@ export function GridChart({
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
+    const css = getComputedStyle(document.documentElement);
+    const bgElevated = css.getPropertyValue('--color-bg-elevated').trim();
+    const borderSubtle = css.getPropertyValue('--color-border-subtle').trim();
+    const textMuted = css.getPropertyValue('--color-text-muted').trim();
 
     const chart = createChart(el, {
       width: el.clientWidth,
       height: el.clientHeight,
       layout: {
-        background: { type: ColorType.Solid, color: COLORS.bgElevated },
-        textColor: COLORS.textMuted,
+        background: { type: ColorType.Solid, color: bgElevated },
+        textColor: textMuted,
         fontFamily:
           'JetBrains Mono, SF Mono, Monaco, Consolas, monospace',
         fontSize: 11,
       },
       grid: {
-        vertLines: { color: COLORS.borderSubtle, style: 1 },
-        horzLines: { color: COLORS.borderSubtle, style: 1 },
+        vertLines: { color: borderSubtle, style: 1 },
+        horzLines: { color: borderSubtle, style: 1 },
       },
       crosshair: {
         mode: CrosshairMode.Normal,
-        vertLine: { color: COLORS.textMuted, width: 1, style: 3 },
-        horzLine: { color: COLORS.textMuted, width: 1, style: 3 },
+        vertLine: { color: textMuted, width: 1, style: 3 },
+        horzLine: { color: textMuted, width: 1, style: 3 },
       },
       rightPriceScale: {
-        borderColor: COLORS.borderSubtle,
+        borderColor: borderSubtle,
         scaleMargins: { top: 0.1, bottom: 0.1 },
       },
       timeScale: {
-        borderColor: COLORS.borderSubtle,
+        borderColor: borderSubtle,
         timeVisible: true,
         secondsVisible: false,
       },
@@ -162,7 +168,7 @@ export function GridChart({
       entryLineRef.current = null;
       liqLineRef.current = null;
     };
-  }, []);
+  }, [theme]);
 
   // ── Candle data ────────────────────────────────────────────────────
   useEffect(() => {
@@ -181,7 +187,7 @@ export function GridChart({
 
     series.setData(data);
     chartRef.current?.timeScale().fitContent();
-  }, [candles]);
+  }, [candles, theme]);
 
   // ── Grid level priceLines ──────────────────────────────────────────
   useEffect(() => {
@@ -223,7 +229,7 @@ export function GridChart({
         existing.delete(idx);
       }
     }
-  }, [levels, recentlyFilled]);
+  }, [levels, recentlyFilled, theme]);
 
   // ── Mark / entry / liquidation reference lines ─────────────────────
   useEffect(() => {
@@ -293,7 +299,7 @@ export function GridChart({
       series.removePriceLine(liqLineRef.current);
       liqLineRef.current = null;
     }
-  }, [markPrice, entryPrice, liquidationPrice]);
+  }, [markPrice, entryPrice, liquidationPrice, theme]);
 
   // Build a screen-reader summary of the chart state. Lightweight Charts
   // renders to a canvas which is opaque to assistive tech, so we expose

@@ -16,6 +16,7 @@ import {
   type UTCTimestamp,
 } from 'lightweight-charts';
 import { api } from '@/lib/api-client';
+import { useUiStore } from '@/stores/ui-store';
 
 interface RangePickerChartProps {
   pair: string;
@@ -32,6 +33,7 @@ export function RangePickerChart({
   onLowerChange,
   onUpperChange,
 }: RangePickerChartProps) {
+  const theme = useUiStore((state) => state.theme);
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
@@ -50,16 +52,19 @@ export function RangePickerChart({
   // Create chart
   useEffect(() => {
     if (!containerRef.current) return;
+    const css = getComputedStyle(document.documentElement);
+    const textMuted = css.getPropertyValue('--color-text-muted').trim();
+    const borderSubtle = css.getPropertyValue('--color-border-subtle').trim();
 
     const chart = createChart(containerRef.current, {
       layout: {
         background: { type: ColorType.Solid, color: 'transparent' },
-        textColor: 'rgba(255,255,255,0.5)',
+        textColor: textMuted,
         fontSize: 10,
       },
       grid: {
-        vertLines: { color: 'rgba(255,255,255,0.04)' },
-        horzLines: { color: 'rgba(255,255,255,0.04)' },
+        vertLines: { color: borderSubtle },
+        horzLines: { color: borderSubtle },
       },
       crosshair: { mode: CrosshairMode.Normal },
       rightPriceScale: { borderVisible: false },
@@ -96,7 +101,7 @@ export function RangePickerChart({
       chartRef.current = null;
       seriesRef.current = null;
     };
-  }, []);
+  }, [theme]);
 
   // Update candle data
   useEffect(() => {
@@ -110,7 +115,7 @@ export function RangePickerChart({
     }));
     seriesRef.current.setData(data);
     chartRef.current?.timeScale().fitContent();
-  }, [candlesQuery.data]);
+  }, [candlesQuery.data, theme]);
 
   // Update price lines when lower/upper change
   useEffect(() => {
@@ -147,7 +152,7 @@ export function RangePickerChart({
         })
       );
     }
-  }, [lower, upper]);
+  }, [lower, upper, theme]);
 
   // Drag handler — convert mouse Y to price
   const handleMouseMove = useCallback(

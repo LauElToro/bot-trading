@@ -19,11 +19,18 @@ export const useUiStore = create<UiState>()(
   persist(
     (set) => ({
       sidebarCollapsed: false,
-      theme: 'dark',
+      theme: 'light',
       toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
       setSidebar: (collapsed) => set({ sidebarCollapsed: collapsed }),
-      setTheme: (theme) => set({ theme }),
-      toggleTheme: () => set((s) => ({ theme: s.theme === 'dark' ? 'light' : 'dark' })),
+      setTheme: (theme) => {
+        applyThemeToDocument(theme);
+        set({ theme });
+      },
+      toggleTheme: () => set((s) => {
+        const theme = s.theme === 'dark' ? 'light' : 'dark';
+        applyThemeToDocument(theme);
+        return { theme };
+      }),
     }),
     {
       name: 'toro-ui',

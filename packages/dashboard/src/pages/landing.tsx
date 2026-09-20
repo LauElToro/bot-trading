@@ -17,6 +17,7 @@ import { BrandMark } from '@/components/brand-mark';
 import { LanguageToggle, useLang } from '@/i18n';
 import { useAuth } from '@/lib/auth-context';
 import { GRVT_REFERRAL_URL } from '@/lib/brand';
+import { ThemeToggle } from '@/components/theme-toggle';
 
 const COPY = {
   es: {
@@ -259,7 +260,7 @@ function GridInstrument({
   ];
 
   return (
-    <div className="relative border border-border-default bg-[#100e0b] shadow-[0_28px_90px_rgba(0,0,0,.55)]">
+    <div className="relative border border-border-default bg-bg-elevated shadow-lg">
       <div className="flex items-center justify-between border-b border-border-subtle px-4 py-3">
         <div>
           <div className="font-mono text-[10px] tracking-[.18em] text-text-muted">{copy.pair}</div>
@@ -407,7 +408,7 @@ export function LandingPage() {
   }, [copy, structuredData]);
 
   return (
-    <div className="min-h-dvh overflow-x-hidden bg-bg-base text-text-primary selection:bg-primary selection:text-bg-base">
+    <div className="min-h-dvh overflow-x-hidden bg-bg-base text-text-primary selection:bg-primary selection:text-white">
       <header className="sticky top-0 z-50 border-b border-border-subtle bg-bg-base/90 backdrop-blur-xl">
         <div className="mx-auto flex h-16 max-w-7xl items-center px-5 lg:px-8">
           <a href="#top" aria-label="Toro home">
@@ -426,6 +427,7 @@ export function LandingPage() {
           </nav>
           <div className="ml-auto flex items-center gap-2 md:ml-8">
             <LanguageToggle variant="compact" />
+            <ThemeToggle />
             <Link
               to={token ? '/dashboard' : '/dashboard/login'}
               className="hidden border border-border-default px-3 py-1.5 text-xs font-medium text-text-secondary transition-colors hover:border-primary hover:text-primary sm:inline-flex"
@@ -523,32 +525,32 @@ export function LandingPage() {
           </div>
         </section>
 
-        <section id="control" className="scroll-mt-20 border-b border-border-subtle bg-[#0a1510]">
+        <section id="control" className="scroll-mt-20 border-b border-border-subtle bg-bg-surface">
           <div className="mx-auto grid max-w-7xl lg:grid-cols-2">
-            <div className="px-5 py-20 lg:border-r lg:border-white/10 lg:px-8 lg:py-28">
-              <p className="font-mono text-[10px] tracking-[.2em] text-success">{copy.controlEyebrow}</p>
+            <div className="px-5 py-20 lg:border-r lg:border-border-subtle lg:px-8 lg:py-28">
+              <p className="font-mono text-[10px] tracking-[.2em] text-primary">{copy.controlEyebrow}</p>
               <h2 className="mt-4 max-w-xl text-4xl font-semibold leading-tight tracking-[-.035em] sm:text-5xl">
                 {copy.controlTitle}
               </h2>
-              <p className="mt-6 max-w-xl text-base leading-7 text-[#a9b9ae]">{copy.controlBody}</p>
-              <div className="mt-10 grid gap-px border border-white/10 bg-white/10 sm:grid-cols-2">
+              <p className="mt-6 max-w-xl text-base leading-7 text-text-secondary">{copy.controlBody}</p>
+              <div className="mt-10 grid gap-px border border-border-subtle bg-border-subtle sm:grid-cols-2">
                 {copy.controls.map(([title, body], index) => {
                   const Icon = [ShieldCheck, Gauge, Repeat2, BarChart3][index];
                   return (
-                    <div key={title} className="bg-[#0a1510] p-5">
-                      <Icon className="size-5 text-success" />
-                      <h3 className="mt-5 text-sm font-medium text-[#edf5ef]">{title}</h3>
-                      <p className="mt-2 text-xs leading-5 text-[#809488]">{body}</p>
+                    <div key={title} className="bg-bg-base p-5">
+                      <Icon className="size-5 text-primary" />
+                      <h3 className="mt-5 text-sm font-medium text-text-primary">{title}</h3>
+                      <p className="mt-2 text-xs leading-5 text-text-muted">{body}</p>
                     </div>
                   );
                 })}
               </div>
             </div>
-            <div className="flex flex-col justify-between border-t border-white/10 px-5 py-20 lg:border-t-0 lg:px-12 lg:py-28">
+            <div className="flex flex-col justify-between border-t border-border-subtle px-5 py-20 lg:border-t-0 lg:px-12 lg:py-28">
               <div>
                 <KeyRound className="size-8 text-primary" strokeWidth={1.5} />
                 <h2 className="mt-8 max-w-lg text-3xl font-semibold tracking-[-.03em] sm:text-4xl">{copy.openTitle}</h2>
-                <p className="mt-5 max-w-lg text-base leading-7 text-[#a9b9ae]">{copy.openBody}</p>
+                <p className="mt-5 max-w-lg text-base leading-7 text-text-secondary">{copy.openBody}</p>
                 <div className="mt-8 inline-flex items-center gap-3 text-sm font-medium text-primary">
                   <ShieldCheck className="size-4" />
                   {copy.source}
@@ -556,7 +558,7 @@ export function LandingPage() {
               </div>
               <div className="mt-14 flex flex-wrap gap-2">
                 {copy.architecture.map((item) => (
-                  <span key={item} className="border border-white/10 px-3 py-2 font-mono text-[9px] tracking-wider text-[#809488]">
+                  <span key={item} className="border border-border-subtle px-3 py-2 font-mono text-[9px] tracking-wider text-text-muted">
                     {item}
                   </span>
                 ))}
@@ -644,14 +646,14 @@ export function LandingPage() {
           </div>
         </section>
 
-        <section className="relative overflow-hidden bg-primary text-bg-base">
+        <section className="relative overflow-hidden bg-primary text-white">
           <div className="absolute -right-16 -top-28 text-[22rem] font-bold leading-none text-black/[.06]" aria-hidden="true">T</div>
           <div className="relative mx-auto max-w-7xl px-5 py-20 lg:px-8 lg:py-24">
             <Zap className="size-7" />
             <h2 className="mt-7 max-w-4xl text-4xl font-semibold leading-[1.05] tracking-[-.045em] sm:text-6xl">{copy.finalTitle}</h2>
-            <p className="mt-6 max-w-2xl text-base text-bg-base/75">{copy.finalBody}</p>
+            <p className="mt-6 max-w-2xl text-base text-white/80">{copy.finalBody}</p>
             <div className="mt-9 flex flex-col gap-3 sm:flex-row">
-              <Link to={appTarget} className="inline-flex min-h-12 items-center justify-center gap-3 bg-bg-base px-5 text-sm font-semibold text-primary">
+              <Link to={appTarget} className="inline-flex min-h-12 items-center justify-center gap-3 bg-white px-5 text-sm font-semibold text-primary">
                 {copy.finalCta}
                 <ArrowRight className="size-4" />
               </Link>
@@ -659,7 +661,7 @@ export function LandingPage() {
                 href={GRVT_REFERRAL_URL}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="inline-flex min-h-12 items-center justify-center gap-3 border border-bg-base/30 px-5 text-sm font-medium hover:bg-black/10"
+                className="inline-flex min-h-12 items-center justify-center gap-3 border border-white/40 px-5 text-sm font-medium hover:bg-black/10"
               >
                 {copy.grvtCta}
                 <ArrowUpRight className="size-4" />
@@ -669,7 +671,7 @@ export function LandingPage() {
         </section>
       </main>
 
-      <footer className="bg-[#080705]">
+      <footer className="bg-bg-surface">
         <div className="mx-auto max-w-7xl px-5 py-10 lg:px-8">
           <div className="flex flex-col gap-7 border-b border-border-subtle pb-8 sm:flex-row sm:items-center sm:justify-between">
             <BrandMark compact />

@@ -15,7 +15,7 @@ export function Sparkline({ data, height = 40 }: SparklineProps) {
   const first = data[0]?.value ?? 0;
   const last = data[data.length - 1]?.value ?? 0;
   const isUp = last >= first;
-  const stroke = isUp ? '#22C55E' : '#EF4444';
+  const stroke = isUp ? 'var(--color-success)' : 'var(--color-danger)';
   const fillId = `spark-${isUp ? 'up' : 'down'}`;
 
   const pctChange = first > 0 ? ((last - first) / first) * 100 : 0;

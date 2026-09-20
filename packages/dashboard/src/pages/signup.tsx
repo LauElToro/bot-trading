@@ -226,53 +226,53 @@ export function SignupPage() {
         />
       ) : (
         <div>
-          <p className="font-mono text-[10px] tracking-[.2em] text-[#9a711f]">{copy.kicker}</p>
-          <h1 className="mt-2 text-3xl font-bold tracking-[-.035em] text-[#211c15] sm:text-4xl">{copy.title}</h1>
-          <p className="mt-3 text-sm leading-6 text-[#756a5b]">{copy.subtitle}</p>
+          <p className="font-mono text-[10px] tracking-[.2em] text-primary">{copy.kicker}</p>
+          <h1 className="mt-2 text-3xl font-bold tracking-[-.035em] text-text-primary sm:text-4xl">{copy.title}</h1>
+          <p className="mt-3 text-sm leading-6 text-text-muted">{copy.subtitle}</p>
 
           <form onSubmit={handleSubmit} className="mt-7 space-y-3.5">
             <label className="block">
-              <span className="mb-1.5 block text-xs font-semibold text-[#453d33]">{copy.email}</span>
+              <span className="mb-1.5 block text-xs font-semibold text-text-secondary">{copy.email}</span>
               <span className="relative block">
-                <Mail className="absolute left-4 top-1/2 size-4 -translate-y-1/2 text-[#9a9185]" />
+                <Mail className="absolute left-4 top-1/2 size-4 -translate-y-1/2 text-text-disabled" />
                 <input type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder={copy.emailPlaceholder} disabled={pending} required className={`${authInputClass} pl-11`} />
               </span>
             </label>
             <div className="grid gap-3 sm:grid-cols-2">
               <label className="block">
-                <span className="mb-1.5 block text-xs font-semibold text-[#453d33]">{copy.password}</span>
+                <span className="mb-1.5 block text-xs font-semibold text-text-secondary">{copy.password}</span>
                 <span className="relative block">
-                  <LockKeyhole className="absolute left-4 top-1/2 size-4 -translate-y-1/2 text-[#9a9185]" />
+                  <LockKeyhole className="absolute left-4 top-1/2 size-4 -translate-y-1/2 text-text-disabled" />
                   <input type={showPassword ? 'text' : 'password'} autoComplete="new-password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder={copy.passwordPlaceholder} disabled={pending} required className={`${authInputClass} pl-11 pr-10`} />
-                  <button type="button" onClick={() => setShowPassword((value) => !value)} className="absolute right-3 top-1/2 -translate-y-1/2 text-[#8f877c]" aria-label={showPassword ? 'Hide password' : 'Show password'}>
+                  <button type="button" onClick={() => setShowPassword((value) => !value)} className="absolute right-3 top-1/2 -translate-y-1/2 text-text-muted" aria-label={showPassword ? 'Hide password' : 'Show password'}>
                     {showPassword ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
                   </button>
                 </span>
               </label>
               <label className="block">
-                <span className="mb-1.5 block text-xs font-semibold text-[#453d33]">{copy.confirm}</span>
+                <span className="mb-1.5 block text-xs font-semibold text-text-secondary">{copy.confirm}</span>
                 <input type={showPassword ? 'text' : 'password'} autoComplete="new-password" value={confirm} onChange={(event) => setConfirm(event.target.value)} disabled={pending} required className={authInputClass} />
               </label>
             </div>
-            {passwordError && <p className="text-xs text-[#b13b2d]">{passwordError}</p>}
+            {passwordError && <p className="text-xs text-danger">{passwordError}</p>}
 
-            <div className="rounded-lg border border-[#dfc777] bg-[#fff8df] p-3.5">
+            <div className="rounded-lg border border-primary/25 bg-primary-soft p-3.5">
               <div className="flex items-start justify-between gap-3">
                 <div>
-                  <p className="text-xs font-bold text-[#453515]">{copy.referralTitle}</p>
-                  <p className="mt-1 text-[11px] leading-4 text-[#75643f]">{copy.referralBody}</p>
+                  <p className="text-xs font-bold text-text-primary">{copy.referralTitle}</p>
+                  <p className="mt-1 text-[11px] leading-4 text-text-muted">{copy.referralBody}</p>
                 </div>
                 <a
                   href={GRVT_REFERRAL_URL}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="shrink-0 rounded-md border border-[#d2ad43] px-2.5 py-1.5 text-[10px] font-bold text-[#7d5b0e] hover:bg-[#f7e9b7]"
+                  className="shrink-0 rounded-md border border-primary/40 px-2.5 py-1.5 text-[10px] font-bold text-primary hover:bg-primary/10"
                 >
                   GRVT ↗
                 </a>
               </div>
               <label className="mt-3 block">
-                <span className="mb-1.5 block text-[10px] font-semibold uppercase tracking-wider text-[#76643c]">
+                <span className="mb-1.5 block text-[10px] font-semibold uppercase tracking-wider text-text-secondary">
                   {copy.referralCode}
                 </span>
                 <input
@@ -286,40 +286,40 @@ export function SignupPage() {
                   className={`${authInputClass} h-10 bg-white font-mono uppercase tracking-[.18em]`}
                 />
               </label>
-              <label className="mt-3 flex cursor-pointer items-start gap-2 text-[11px] leading-4 text-[#5f5132]">
+              <label className="mt-3 flex cursor-pointer items-start gap-2 text-[11px] leading-4 text-text-secondary">
                 <input
                   type="checkbox"
                   checked={referralConfirmed}
                   onChange={(event) => setReferralConfirmed(event.target.checked)}
                   disabled={pending}
-                  className="mt-0.5 size-4 accent-[#c79220]"
+                  className="mt-0.5 size-4 accent-primary"
                 />
                 <span>{copy.referralConfirm}</span>
               </label>
             </div>
 
-            <details className="rounded-lg border border-[#ded8cf] bg-[#faf8f3]">
-              <summary className="cursor-pointer px-4 py-3 text-xs font-semibold text-[#6d6254]">{copy.terms}</summary>
-              <div className="border-t border-[#e4ded5] px-4 py-3">
+            <details className="rounded-lg border border-border-subtle bg-bg-surface">
+              <summary className="cursor-pointer px-4 py-3 text-xs font-semibold text-text-secondary">{copy.terms}</summary>
+              <div className="border-t border-border-subtle px-4 py-3">
                 {tosLoadError ? (
-                  <p className="text-xs text-[#b13b2d]">{t('common.networkError')}</p>
+                  <p className="text-xs text-danger">{t('common.networkError')}</p>
                 ) : !tosTexts ? (
-                  <p className="animate-pulse text-xs text-[#8b8174]">{t('common.loading')}</p>
+                  <p className="animate-pulse text-xs text-text-muted">{t('common.loading')}</p>
                 ) : (
-                  <pre className="max-h-36 overflow-y-auto whitespace-pre-wrap font-sans text-[10px] leading-relaxed text-[#756a5b]">{termsBody}</pre>
+                  <pre className="max-h-36 overflow-y-auto whitespace-pre-wrap font-sans text-[10px] leading-relaxed text-text-muted">{termsBody}</pre>
                 )}
                 <Link
                   to="/terms"
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="mt-3 inline-flex text-[11px] font-semibold text-[#8a6414] underline underline-offset-2"
+                  className="mt-3 inline-flex text-[11px] font-semibold text-primary underline underline-offset-2"
                 >
                   {copy.fullTerms}
                 </Link>
               </div>
             </details>
-            <label className="flex cursor-pointer items-start gap-2.5 text-xs text-[#5f5549]">
-              <input type="checkbox" checked={accepted} onChange={(event) => setAccepted(event.target.checked)} disabled={pending || !tosTexts} className="mt-0.5 size-4 accent-[#c79220]" />
+            <label className="flex cursor-pointer items-start gap-2.5 text-xs text-text-secondary">
+              <input type="checkbox" checked={accepted} onChange={(event) => setAccepted(event.target.checked)} disabled={pending || !tosTexts} className="mt-0.5 size-4 accent-primary" />
               <span>{copy.accept}</span>
             </label>
 
@@ -331,8 +331,8 @@ export function SignupPage() {
 
           {isGoogleSignInEnabled() && (
             <div className="mt-4 space-y-3">
-              <div className="flex items-center gap-3 text-[10px] uppercase tracking-wider text-[#aaa297]">
-                <span className="h-px flex-1 bg-[#e1dcd3]" />{copy.divider}<span className="h-px flex-1 bg-[#e1dcd3]" />
+              <div className="flex items-center gap-3 text-[10px] uppercase tracking-wider text-text-disabled">
+                <span className="h-px flex-1 bg-border-subtle" />{copy.divider}<span className="h-px flex-1 bg-border-subtle" />
               </div>
               <GoogleSignInButton
                 onCredential={handleGoogle}
@@ -349,13 +349,13 @@ export function SignupPage() {
             </div>
           )}
 
-          <p className="mt-4 text-center text-xs text-[#756a5b]">
+          <p className="mt-4 text-center text-xs text-text-muted">
             {copy.account}{' '}
-            <Link to="/dashboard/login" className="font-semibold text-[#98701b] hover:underline">{copy.login}</Link>
+            <Link to="/dashboard/login" className="font-semibold text-primary hover:underline">{copy.login}</Link>
           </p>
-          <p className="mt-2 text-center text-[11px] text-[#91877a]">
+          <p className="mt-2 text-center text-[11px] text-text-disabled">
             {copy.referral}{' '}
-            <a href={GRVT_REFERRAL_URL} target="_blank" rel="noopener noreferrer" className="font-medium text-[#98701b] hover:underline">{copy.referralLink}</a>
+            <a href={GRVT_REFERRAL_URL} target="_blank" rel="noopener noreferrer" className="font-medium text-primary hover:underline">{copy.referralLink}</a>
           </p>
         </div>
       )}

@@ -4,47 +4,47 @@
 @import 'tailwindcss';
 
 @theme {
-  /* Warm dark surfaces */
-  --color-bg-base: #0c0a08;
-  --color-bg-surface: #161310;
-  --color-bg-elevated: #1e1a16;
-  --color-bg-muted: #2a241c;
+  /* Light by default: white, neutral, and confidence-first. */
+  --color-bg-base: #ffffff;
+  --color-bg-surface: #f8fafc;
+  --color-bg-elevated: #ffffff;
+  --color-bg-muted: #f1f5f9;
 
   /* Borders */
-  --color-border-subtle: #322b22;
-  --color-border-default: #4a3f32;
-  --color-border-strong: #6b5a45;
+  --color-border-subtle: #e5e7eb;
+  --color-border-default: #cbd5e1;
+  --color-border-strong: #94a3b8;
 
   /* Text */
-  --color-text-primary: #f6f0e6;
-  --color-text-secondary: #d4c6b0;
-  --color-text-muted: #a89478;
-  --color-text-disabled: #7a6a55;
+  --color-text-primary: #111827;
+  --color-text-secondary: #374151;
+  --color-text-muted: #64748b;
+  --color-text-disabled: #94a3b8;
 
   /* Semantic */
-  --color-success: #3dba74;
-  --color-success-strong: #2f9a5e;
-  --color-success-soft: #0d2a18;
+  --color-success: #2563eb;
+  --color-success-strong: #1d4ed8;
+  --color-success-soft: #eff6ff;
   --color-danger: #e85d4c;
   --color-danger-strong: #c94a3b;
   --color-danger-soft: #2c100c;
   --color-warning: #e0a43a;
   --color-warning-strong: #c48b22;
   --color-warning-soft: #2c1f08;
-  --color-info: #e8b84a;
+  --color-info: #2563eb;
 
-  /* Primary accent — gold */
-  --color-primary: #e8b84a;
-  --color-primary-strong: #d4a017;
-  --color-primary-soft: #2a2110;
+  /* Toro brand accent — red */
+  --color-primary: #dc2626;
+  --color-primary-strong: #b91c1c;
+  --color-primary-soft: #fef2f2;
 
   /* Chart series */
-  --color-chart-1: #e8b84a;
-  --color-chart-2: #3dba74;
-  --color-chart-3: #e0a43a;
-  --color-chart-4: #c4a574;
-  --color-chart-5: #e85d4c;
-  --color-chart-6: #a89478;
+  --color-chart-1: #dc2626;
+  --color-chart-2: #2563eb;
+  --color-chart-3: #f59e0b;
+  --color-chart-4: #7c3aed;
+  --color-chart-5: #ef4444;
+  --color-chart-6: #64748b;
 
   /* Candlestick */
   --color-candle-up: #3dba74;
@@ -64,49 +64,61 @@
   --radius-xl: 1rem;
   --radius-full: 9999px;
 
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
-  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.5);
-  --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.6);
+  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.06);
+  --shadow-md: 0 4px 12px rgba(15, 23, 42, 0.1);
+  --shadow-lg: 0 12px 32px rgba(15, 23, 42, 0.14);
 
   --text-2xs: 0.6875rem;
   --text-2xs--line-height: 1rem;
 }
 
-html[data-theme='light'] {
-  --color-bg-base: #f7f1e6;
-  --color-bg-surface: #fffdf8;
-  --color-bg-elevated: #ffffff;
-  --color-bg-muted: #efe6d4;
+html[data-theme='dark'] {
+  --color-bg-base: #09090b;
+  --color-bg-surface: #111113;
+  --color-bg-elevated: #18181b;
+  --color-bg-muted: #27272a;
 
-  --color-border-subtle: #e4d6be;
-  --color-border-default: #cbb896;
-  --color-border-strong: #a89478;
+  --color-border-subtle: #27272a;
+  --color-border-default: #3f3f46;
+  --color-border-strong: #71717a;
 
-  --color-text-primary: #1c160e;
-  --color-text-secondary: #3d3428;
-  --color-text-muted: #6b5a45;
-  --color-text-disabled: #a89478;
+  --color-text-primary: #fafafa;
+  --color-text-secondary: #d4d4d8;
+  --color-text-muted: #a1a1aa;
+  --color-text-disabled: #71717a;
 
-  --color-success: #15803d;
-  --color-success-strong: #166534;
-  --color-success-soft: #dcfce7;
-  --color-danger: #b91c1c;
-  --color-danger-strong: #991b1b;
-  --color-danger-soft: #fee2e2;
-  --color-warning: #b45309;
-  --color-warning-strong: #92400e;
-  --color-warning-soft: #fef3c7;
-  --color-info: #a16207;
+  --color-success: #60a5fa;
+  --color-success-strong: #3b82f6;
+  --color-success-soft: #172554;
+  --color-danger: #f87171;
+  --color-danger-strong: #ef4444;
+  --color-danger-soft: #450a0a;
+  --color-warning: #fbbf24;
+  --color-warning-strong: #f59e0b;
+  --color-warning-soft: #422006;
+  --color-info: #60a5fa;
 
-  --color-primary: #a16207;
-  --color-primary-strong: #854d0e;
-  --color-primary-soft: #fef3c7;
+  --color-primary: #ef4444;
+  --color-primary-strong: #dc2626;
+  --color-primary-soft: #450a0a;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.45);
+  --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.55);
 }
 
 html,
 body,
 #root {
   height: 100%;
+}
+
+html {
+  color-scheme: light;
+}
+
+html[data-theme='dark'] {
+  color-scheme: dark;
 }
 
 body {

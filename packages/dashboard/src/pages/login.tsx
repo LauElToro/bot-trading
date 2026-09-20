@@ -136,17 +136,17 @@ export function LoginPage() {
         />
       ) : (
         <div>
-          <p className="font-mono text-[10px] tracking-[.2em] text-[#9a711f]">{copy.kicker}</p>
-          <h1 className="mt-2 text-3xl font-bold tracking-[-.035em] text-[#211c15] sm:text-4xl">
+          <p className="font-mono text-[10px] tracking-[.2em] text-primary">{copy.kicker}</p>
+          <h1 className="mt-2 text-3xl font-bold tracking-[-.035em] text-text-primary sm:text-4xl">
             {copy.title}
           </h1>
-          <p className="mt-3 text-sm leading-6 text-[#756a5b]">{copy.subtitle}</p>
+          <p className="mt-3 text-sm leading-6 text-text-muted">{copy.subtitle}</p>
 
           <form onSubmit={handleSubmit} className="mt-8 space-y-4">
             <label className="block">
-              <span className="mb-2 block text-xs font-semibold text-[#453d33]">{copy.email}</span>
+              <span className="mb-2 block text-xs font-semibold text-text-secondary">{copy.email}</span>
               <span className="relative block">
-                <Mail className="absolute left-4 top-1/2 size-4 -translate-y-1/2 text-[#9a9185]" />
+                <Mail className="absolute left-4 top-1/2 size-4 -translate-y-1/2 text-text-disabled" />
                 <input
                   type="email"
                   autoComplete="email"
@@ -160,9 +160,9 @@ export function LoginPage() {
               </span>
             </label>
             <label className="block">
-              <span className="mb-2 block text-xs font-semibold text-[#453d33]">{copy.password}</span>
+              <span className="mb-2 block text-xs font-semibold text-text-secondary">{copy.password}</span>
               <span className="relative block">
-                <LockKeyhole className="absolute left-4 top-1/2 size-4 -translate-y-1/2 text-[#9a9185]" />
+                <LockKeyhole className="absolute left-4 top-1/2 size-4 -translate-y-1/2 text-text-disabled" />
                 <input
                   type={showPassword ? 'text' : 'password'}
                   autoComplete="current-password"
@@ -177,14 +177,14 @@ export function LoginPage() {
                   type="button"
                   onClick={() => setShowPassword((value) => !value)}
                   aria-label={showPassword ? 'Hide password' : 'Show password'}
-                  className="absolute right-4 top-1/2 -translate-y-1/2 text-[#8f877c]"
+                  className="absolute right-4 top-1/2 -translate-y-1/2 text-text-muted"
                 >
                   {showPassword ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
                 </button>
               </span>
             </label>
             <div className="flex justify-end">
-              <Link to="/dashboard/forgot-password" className="text-xs font-medium text-[#98701b] hover:underline">
+              <Link to="/dashboard/forgot-password" className="text-xs font-medium text-primary hover:underline">
                 {t('auth.login.forgotPassword')}
               </Link>
             </div>
@@ -196,24 +196,24 @@ export function LoginPage() {
 
           {isGoogleSignInEnabled() && (
             <div className="mt-5 space-y-4">
-              <div className="flex items-center gap-3 text-[10px] uppercase tracking-wider text-[#aaa297]">
-                <span className="h-px flex-1 bg-[#e1dcd3]" />
+              <div className="flex items-center gap-3 text-[10px] uppercase tracking-wider text-text-disabled">
+                <span className="h-px flex-1 bg-border-subtle" />
                 {copy.divider}
-                <span className="h-px flex-1 bg-[#e1dcd3]" />
+                <span className="h-px flex-1 bg-border-subtle" />
               </div>
               <GoogleSignInButton onCredential={handleGoogle} disabled={pending} label="signin_with" locale={lang} />
             </div>
           )}
 
-          <p className="mt-5 text-center text-xs text-[#756a5b]">
+          <p className="mt-5 text-center text-xs text-text-muted">
             {copy.noAccount}{' '}
-            <Link to="/dashboard/signup" className="font-semibold text-[#98701b] hover:underline">
+            <Link to="/dashboard/signup" className="font-semibold text-primary hover:underline">
               {copy.create}
             </Link>
           </p>
-          <p className="mt-3 text-center text-[11px] text-[#91877a]">
+          <p className="mt-3 text-center text-[11px] text-text-disabled">
             {copy.referral}{' '}
-            <a href={GRVT_REFERRAL_URL} target="_blank" rel="noopener noreferrer" className="font-medium text-[#98701b] hover:underline">
+            <a href={GRVT_REFERRAL_URL} target="_blank" rel="noopener noreferrer" className="font-medium text-primary hover:underline">
               {copy.referralLink}
             </a>
           </p>

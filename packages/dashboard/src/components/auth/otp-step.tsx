@@ -88,15 +88,15 @@ export function OtpStep({
 
   return (
     <div>
-      <div className="grid size-12 place-items-center rounded-xl bg-[#f6ebcf] text-[#a87312]">
+      <div className="grid size-12 place-items-center rounded-xl bg-primary-soft text-primary">
         <MailCheck className="size-6" />
       </div>
-      <p className="mt-7 font-mono text-[10px] tracking-[.2em] text-[#9a711f]">{copy.kicker}</p>
-      <h1 className="mt-2 text-3xl font-bold tracking-[-.035em] text-[#211c15] sm:text-4xl">
+      <p className="mt-7 font-mono text-[10px] tracking-[.2em] text-primary">{copy.kicker}</p>
+      <h1 className="mt-2 text-3xl font-bold tracking-[-.035em] text-text-primary sm:text-4xl">
         {copy.title}
       </h1>
-      <p className="mt-3 text-sm leading-6 text-[#756a5b]">
-        {copy.body} <strong className="font-semibold text-[#211c15]">{emailHint}</strong>.
+      <p className="mt-3 text-sm leading-6 text-text-muted">
+        {copy.body} <strong className="font-semibold text-text-primary">{emailHint}</strong>.
       </p>
 
       <form
@@ -106,7 +106,7 @@ export function OtpStep({
           if (code.length === 6) void onVerify(code);
         }}
       >
-        <label className="mb-2 block text-xs font-semibold text-[#453d33]">{copy.code}</label>
+        <label className="mb-2 block text-xs font-semibold text-text-secondary">{copy.code}</label>
         <div className="grid grid-cols-6 gap-2">
           {digits.map((digit, index) => (
             <input
@@ -128,12 +128,12 @@ export function OtpStep({
               maxLength={1}
               disabled={pending}
               autoFocus={index === 0}
-              className="h-14 min-w-0 rounded-lg border border-[#d8d2c8] bg-[#f3f5f6] text-center font-mono text-xl font-semibold text-[#211c15] outline-none focus:border-[#b9871d] focus:bg-white focus:ring-2 focus:ring-[#e8b84a]/20"
+              className="h-14 min-w-0 rounded-lg border border-border-default bg-bg-surface text-center font-mono text-xl font-semibold text-text-primary outline-none focus:border-primary focus:bg-bg-base focus:ring-2 focus:ring-primary/15"
             />
           ))}
         </div>
         {error && (
-          <p role="alert" className="mt-3 text-xs text-[#b13b2d]">
+          <p role="alert" className="mt-3 text-xs text-danger">
             {error}
           </p>
         )}
@@ -142,13 +142,13 @@ export function OtpStep({
         </button>
       </form>
 
-      <div className="mt-5 flex items-center justify-center gap-1.5 text-xs text-[#756a5b]">
+      <div className="mt-5 flex items-center justify-center gap-1.5 text-xs text-text-muted">
         <span>{resent ? copy.resent : copy.noCode}</span>
         <button
           type="button"
           disabled={pending || cooldown > 0}
           onClick={() => void resend()}
-          className="font-semibold text-[#98701b] hover:underline disabled:text-[#aaa298] disabled:no-underline"
+          className="font-semibold text-primary hover:underline disabled:text-text-disabled disabled:no-underline"
         >
           {cooldown > 0
             ? copy.wait.replace('{seconds}', String(cooldown))
@@ -159,7 +159,7 @@ export function OtpStep({
         type="button"
         onClick={onBack}
         disabled={pending}
-        className="mx-auto mt-7 flex items-center gap-2 text-xs text-[#756a5b] hover:text-[#211c15]"
+        className="mx-auto mt-7 flex items-center gap-2 text-xs text-text-muted hover:text-text-primary"
       >
         <ArrowLeft className="size-3.5" />
         {copy.back}

@@ -4,6 +4,7 @@ import { ArrowLeft, ExternalLink, ShieldAlert } from 'lucide-react';
 import { BrandMark } from '@/components/brand-mark';
 import { LanguageToggle, useLang } from '@/i18n';
 import { api } from '@/lib/api-client';
+import { ThemeToggle } from '@/components/theme-toggle';
 
 const COPY = {
   es: {
@@ -66,37 +67,40 @@ export function TermsPage() {
   }, [lang]);
 
   return (
-    <div className="min-h-screen bg-[#f4f0e8] text-[#211c15]">
-      <header className="border-b border-[#d9d1c4] bg-[#faf8f3]">
+    <div className="min-h-screen bg-bg-surface text-text-primary">
+      <header className="border-b border-border-subtle bg-bg-base">
         <div className="mx-auto flex max-w-5xl items-center justify-between px-5 py-4">
           <Link to="/" aria-label={copy.back}><BrandMark compact /></Link>
-          <LanguageToggle />
+          <div className="flex items-center gap-2">
+            <LanguageToggle />
+            <ThemeToggle />
+          </div>
         </div>
       </header>
 
       <main className="mx-auto max-w-5xl px-5 py-10 sm:py-16">
-        <Link to="/" className="inline-flex items-center gap-2 text-xs font-semibold text-[#756a5b] hover:text-[#211c15]">
+        <Link to="/" className="inline-flex items-center gap-2 text-xs font-semibold text-text-muted hover:text-text-primary">
           <ArrowLeft className="size-4" /> {copy.back}
         </Link>
 
         <div className="mt-8 grid gap-8 lg:grid-cols-[minmax(0,1fr)_280px]">
-          <article className="rounded-2xl border border-[#d9d1c4] bg-[#fffdf9] p-6 shadow-sm sm:p-10">
-            <p className="font-mono text-[10px] tracking-[.22em] text-[#9a711f]">{copy.eyebrow}</p>
+          <article className="rounded-2xl border border-border-subtle bg-bg-base p-6 shadow-sm sm:p-10">
+            <p className="font-mono text-[10px] tracking-[.22em] text-primary">{copy.eyebrow}</p>
             <h1 className="mt-3 text-3xl font-bold tracking-[-.035em] sm:text-5xl">{copy.title}</h1>
-            <p className="mt-5 max-w-2xl text-sm leading-6 text-[#675e53]">{copy.summary}</p>
+            <p className="mt-5 max-w-2xl text-sm leading-6 text-text-secondary">{copy.summary}</p>
             {terms && (
-              <p className="mt-4 font-mono text-[10px] uppercase tracking-wider text-[#918678]">
+              <p className="mt-4 font-mono text-[10px] uppercase tracking-wider text-text-disabled">
                 {copy.version}: {terms.version}-{lang}
               </p>
             )}
 
-            <div className="mt-8 border-t border-[#e4ded5] pt-8">
+            <div className="mt-8 border-t border-border-subtle pt-8">
               {failed ? (
-                <p className="rounded-lg border border-[#e3b8ae] bg-[#fff1ed] p-4 text-sm text-[#963727]">{copy.error}</p>
+                <p className="rounded-lg border border-danger/30 bg-danger-soft p-4 text-sm text-danger">{copy.error}</p>
               ) : !terms ? (
-                <p className="animate-pulse text-sm text-[#8b8174]">{copy.loading}</p>
+                <p className="animate-pulse text-sm text-text-muted">{copy.loading}</p>
               ) : (
-                <pre className="whitespace-pre-wrap font-sans text-[13px] leading-7 text-[#4f473d]">
+                <pre className="whitespace-pre-wrap font-sans text-[13px] leading-7 text-text-secondary">
                   {terms.texts[lang]}
                 </pre>
               )}
@@ -104,14 +108,14 @@ export function TermsPage() {
           </article>
 
           <aside className="lg:sticky lg:top-6 lg:self-start">
-            <div className="rounded-xl border border-[#d8b55a] bg-[#fff8df] p-5">
-              <ShieldAlert className="size-5 text-[#946c13]" />
-              <p className="mt-3 text-sm font-bold text-[#453515]">{copy.warning}</p>
-              <p className="mt-3 text-xs leading-5 text-[#75643f]">{copy.summary}</p>
+            <div className="rounded-xl border border-primary/30 bg-primary-soft p-5">
+              <ShieldAlert className="size-5 text-primary" />
+              <p className="mt-3 text-sm font-bold text-text-primary">{copy.warning}</p>
+              <p className="mt-3 text-xs leading-5 text-text-secondary">{copy.summary}</p>
             </div>
             <Link
               to="/dashboard/signup"
-              className="mt-4 flex min-h-11 items-center justify-center gap-2 rounded-lg bg-[#211c15] px-4 text-sm font-semibold text-white hover:bg-[#393126]"
+              className="mt-4 flex min-h-11 items-center justify-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-white hover:bg-primary-strong"
             >
               {copy.signup} <ExternalLink className="size-4" />
             </Link>

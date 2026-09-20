@@ -51,7 +51,7 @@ export function EquityCurve({ snapshots, points, height = 240 }: EquityCurveProp
   const first = data[0]?.equity ?? 0;
   const last = data[data.length - 1]?.equity ?? 0;
   const isUp = last >= first;
-  const stroke = isUp ? '#22C55E' : '#EF4444';
+  const stroke = isUp ? 'var(--color-success)' : 'var(--color-danger)';
 
   const pctChange = first > 0 ? ((last - first) / first) * 100 : 0;
   const ariaLabel = `Equity curve ${data.length} daily snapshots ${
@@ -75,30 +75,30 @@ export function EquityCurve({ snapshots, points, height = 240 }: EquityCurveProp
               <stop offset="100%" stopColor={stroke} stopOpacity={0} />
             </linearGradient>
           </defs>
-          <CartesianGrid stroke="#1E293B" vertical={false} />
+          <CartesianGrid stroke="var(--color-border-subtle)" vertical={false} />
           <XAxis
             dataKey="date"
-            tick={{ fill: '#94A3B8', fontSize: 10, fontFamily: 'JetBrains Mono' }}
-            stroke="#1E293B"
+            tick={{ fill: 'var(--color-text-muted)', fontSize: 10, fontFamily: 'JetBrains Mono' }}
+            stroke="var(--color-border-subtle)"
             tickFormatter={(v: string) => v.slice(5)}
           />
           <YAxis
-            tick={{ fill: '#94A3B8', fontSize: 10, fontFamily: 'JetBrains Mono' }}
-            stroke="#1E293B"
+            tick={{ fill: 'var(--color-text-muted)', fontSize: 10, fontFamily: 'JetBrains Mono' }}
+            stroke="var(--color-border-subtle)"
             domain={['auto', 'auto']}
             tickFormatter={(v: number) => `$${v.toFixed(0)}`}
             width={60}
           />
           <Tooltip
             contentStyle={{
-              background: '#0F172A',
-              border: '1px solid #334155',
+              background: 'var(--color-bg-elevated)',
+              border: '1px solid var(--color-border-default)',
               borderRadius: 6,
               fontSize: 12,
               fontFamily: 'JetBrains Mono',
             }}
-            labelStyle={{ color: '#94A3B8' }}
-            itemStyle={{ color: '#F8FAFC' }}
+            labelStyle={{ color: 'var(--color-text-muted)' }}
+            itemStyle={{ color: 'var(--color-text-primary)' }}
             formatter={(v: number) => [formatUsd(v), 'Equity']}
           />
           <Area

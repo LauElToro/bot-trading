@@ -18,6 +18,7 @@ import { ResetPasswordPage } from './pages/reset-password';
 import { GrvtOnboardingPage } from './pages/onboarding/grvt';
 import { LandingPage } from './pages/landing';
 import { TermsPage } from './pages/terms';
+import { useUiStore } from './stores/ui-store';
 
 // Bot Detail owns the heaviest dependencies (lightweight-charts + recharts).
 // Lazy-load it so the Overview page doesn't pay the cost on first paint.
@@ -89,6 +90,8 @@ const queryClient = new QueryClient({
 });
 
 export default function App() {
+  const theme = useUiStore((state) => state.theme);
+
   // E.7: show a persistent toast when the browser goes offline,
   // dismiss when back online. Simple and covers WiFi drops, VPN
   // disconnects, etc.
@@ -197,7 +200,7 @@ export default function App() {
           </Routes>
         </BrowserRouter>
         <Toaster
-          theme="dark"
+          theme={theme}
           position="bottom-right"
           toastOptions={{
             style: {

@@ -1,11 +1,9 @@
-import { Moon, Sun } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import { BrandMark } from '@/components/brand-mark';
 import { useWsStatus } from '@/lib/use-ws-channel';
 import type { WsStatus } from '@/lib/ws-client';
-import { applyThemeToDocument, useUiStore } from '@/stores/ui-store';
-import { useEffect } from 'react';
 import { LanguageToggle } from '@/i18n';
+import { ThemeToggle } from '@/components/theme-toggle';
 
 const STATUS_KEY: Record<WsStatus, { color: string; key: string }> = {
   open: { color: 'text-success', key: 'wsLive' },
@@ -24,13 +22,6 @@ const WS_LABELS_FALLBACK: Record<string, string> = {
 export function Header() {
   const status = useWsStatus();
   const styles = STATUS_KEY[status];
-  const theme = useUiStore((s) => s.theme);
-  const toggleTheme = useUiStore((s) => s.toggleTheme);
-
-  // Re-apply on every theme change so the document attribute stays in sync.
-  useEffect(() => {
-    applyThemeToDocument(theme);
-  }, [theme]);
 
   return (
     <header
@@ -65,18 +56,7 @@ export function Header() {
 
       <LanguageToggle variant="compact" className="ml-2" />
 
-      <button
-        type="button"
-        onClick={toggleTheme}
-        aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`}
-        className="ml-1 size-8 rounded-md flex items-center justify-center text-text-secondary hover:text-text-primary hover:bg-bg-muted transition-colors"
-      >
-        {theme === 'dark' ? (
-          <Sun className="size-4" aria-hidden="true" />
-        ) : (
-          <Moon className="size-4" aria-hidden="true" />
-        )}
-      </button>
+      <ThemeToggle className="ml-1" />
     </header>
   );
 }
