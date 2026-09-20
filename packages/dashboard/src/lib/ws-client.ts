@@ -25,7 +25,7 @@ class WsClient {
   private appPingTimer: number | null = null;
 
   private buildUrl(): string {
-    const baseOverride = import.meta.env.VITE_API_BASE_URL ?? '';
+    const baseOverride = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/+$/, '');
     let wsBase: string;
     if (baseOverride) {
       wsBase = baseOverride.replace(/^http/, 'ws');

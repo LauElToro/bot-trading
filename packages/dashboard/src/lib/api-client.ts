@@ -30,7 +30,7 @@ import {
   type ValidateBotResult,
 } from './api-types';
 
-const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? '';
+const BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/+$/, '');
 
 export const ACCESS_TOKEN_KEY = 'grvt-grid-token';
 export const REFRESH_TOKEN_KEY = 'grvt-grid-refresh';
