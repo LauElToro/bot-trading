@@ -87,7 +87,7 @@ export function SignupPage() {
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
   const [accepted, setAccepted] = useState(false);
-  const [referralCode] = useState(GRVT_REFERRAL_CODE);
+  const referralCode = GRVT_REFERRAL_CODE;
   const [referralConfirmed, setReferralConfirmed] = useState(false);
   const [pending, setPending] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
@@ -271,20 +271,17 @@ export function SignupPage() {
                   GRVT ↗
                 </a>
               </div>
-              <label className="mt-3 block">
+              <div className="mt-3">
                 <span className="mb-1.5 block text-[10px] font-semibold uppercase tracking-wider text-text-secondary">
                   {copy.referralCode}
                 </span>
-                <input
-                  type="text"
-                  value={referralCode}
-                  readOnly
-                  maxLength={GRVT_REFERRAL_CODE.length}
-                  disabled={pending}
-                  required
-                  className={`${authInputClass} h-10 cursor-default bg-bg-base font-mono uppercase tracking-[.18em]`}
-                />
-              </label>
+                <div
+                  className="flex h-10 items-center rounded-lg border border-border-default bg-bg-base px-4 font-mono text-sm font-semibold uppercase tracking-[.18em] text-text-primary"
+                  aria-label={`${copy.referralCode}: ${GRVT_REFERRAL_CODE}`}
+                >
+                  {GRVT_REFERRAL_CODE}
+                </div>
+              </div>
               <label className="mt-3 flex cursor-pointer items-start gap-2 text-[11px] leading-4 text-text-secondary">
                 <input
                   type="checkbox"
