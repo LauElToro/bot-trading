@@ -1,8 +1,8 @@
 # Toro
 
-Bot grid privado de LauElToro para futuros perpetuos de [GRVT](https://grvt.io/?ref=5LBBEMJ), con dashboard en tiempo real, alertas por Telegram y credenciales API cifradas por usuario.
+Bot grid privado de LauElToro para futuros perpetuos de [GRVT](https://grvt.io/?ref=HCAQ5ES), con dashboard en tiempo real, alertas por Telegram y credenciales API cifradas por usuario.
 
-Si todavía no tenés cuenta en GRVT, creala con mi referido: **[grvt.io/?ref=5LBBEMJ](https://grvt.io/?ref=5LBBEMJ)**
+Para usar Toro, creá tu cuenta GRVT con el referido requerido: **[grvt.io/?ref=HCAQ5ES](https://grvt.io/?ref=HCAQ5ES)**
 
 ## Uso
 

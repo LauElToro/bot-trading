@@ -380,8 +380,18 @@ export const api = {
 
   // ── Auth endpoints ──────────────────────────────────────────────
 
-  signup: (email: string, password: string, tosLang: 'es' | 'en' = 'en') =>
-    publicRequest<OtpChallenge>('/auth/signup', { email, password, terms_lang: tosLang }),
+  signup: (
+    email: string,
+    password: string,
+    tosLang: 'es' | 'en' = 'en',
+    referralCode = ''
+  ) =>
+    publicRequest<OtpChallenge>('/auth/signup', {
+      email,
+      password,
+      terms_lang: tosLang,
+      referral_code: referralCode,
+    }),
 
   login: (email: string, password: string, lang: 'es' | 'en' = 'en') =>
     publicRequest<OtpChallenge>('/auth/login', { email, password, lang }),
@@ -399,11 +409,13 @@ export const api = {
   loginWithGoogle: (idToken: string, extras: {
     acceptedTerms?: boolean;
     tosLang?: 'es' | 'en';
+    referralCode?: string;
   } = {}) =>
     publicRequest<AuthSession>('/auth/google', {
       idToken,
       accepted_terms: extras.acceptedTerms === true,
       terms_lang: extras.tosLang ?? 'en',
+      referral_code: extras.referralCode ?? '',
     }).then(persistSession),
 
   logoutSession: (storedRefresh?: string | null) =>

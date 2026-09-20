@@ -1774,10 +1774,13 @@ export class GridBotDB {
     is_admin?: boolean;
     google_sub?: string | null;
     email_verified?: boolean;
+    accepted_referral_link?: boolean;
   }): Promise<UserId> {
     const id = newUserId();
     await this.dbRun(
-      `INSERT INTO users (id, email, password_hash, is_admin, google_sub, email_verified, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO users
+        (id, email, password_hash, is_admin, google_sub, email_verified, accepted_referral_link, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         id,
         params.email,
@@ -1785,6 +1788,7 @@ export class GridBotDB {
         params.is_admin ? 1 : 0,
         params.google_sub ?? null,
         params.email_verified ? 1 : 0,
+        params.accepted_referral_link ? 1 : 0,
         Date.now(),
       ]
     );

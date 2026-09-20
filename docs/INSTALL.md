@@ -4,13 +4,13 @@
 > server, with their own GRVT account, with their own keys. **No SaaS.** Your
 > trades, your keys, your liability.
 
-Si no tenés cuenta GRVT, registrate acá: [https://grvt.io/?ref=5LBBEMJ](https://grvt.io/?ref=5LBBEMJ)
+Para usar Toro, registrate en GRVT con el referido requerido: [https://grvt.io/?ref=HCAQ5ES](https://grvt.io/?ref=HCAQ5ES)
 
 ## Prerequisites
 
 | Requirement | Why |
 |---|---|
-| **A GRVT account** | Create one with this referral: [grvt.io/?ref=5LBBEMJ](https://grvt.io/?ref=5LBBEMJ) |
+| **A GRVT account** | Create it with the required referral: [grvt.io/?ref=HCAQ5ES](https://grvt.io/?ref=HCAQ5ES) |
 | **A Linux server** (or Mac, or Windows with WSL2) with Docker Engine ≥ 24 and Docker Compose v2 | The whole stack is containerized. No host Node install needed. |
 | **2 GB RAM** minimum, 1 vCPU is enough | The bot is ~110 MB, dashboard is static, notifier is tiny. |
 | **External PostgreSQL 14+** with TLS | Required for bot state. Set its connection URL in `DATABASE_URL`. |

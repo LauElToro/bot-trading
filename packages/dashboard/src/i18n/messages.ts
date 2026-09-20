@@ -170,7 +170,7 @@ export const MESSAGES = {
         subAccountIdHint:
           'Si lo dejás vacío usamos el Account ID. Solo cambialo si tenés varias sub-cuentas.',
         referralHint: 'Si todavía no tenés cuenta, registrate con mi referido:',
-        referralCta: 'grvt.io/?ref=5LBBEMJ',
+        referralCta: 'grvt.io/?ref=HCAQ5ES',
         saveBtn: 'Guardar credenciales',
         saving: 'Guardando y testeando…',
         saved: 'Credenciales de GRVT guardadas',
@@ -478,7 +478,7 @@ export const MESSAGES = {
       sameOrigin: '(mismo origen)',
       auth: 'Auth',
       referralBody:
-        'Si todavía no tenés cuenta en GRVT, registrate con mi código de referido (5LBBEMJ) para recibir los bonos de GRVT:',
+        'Para usar Toro, tu cuenta de GRVT debe haberse creado con el código de referido HCAQ5ES:',
       referralCta: 'Crear cuenta en GRVT →',
       account: {
         email: 'Email',
@@ -925,7 +925,7 @@ export const MESSAGES = {
         subAccountIdHint:
           'Leave empty and we’ll use the Account ID. Only change if you have several sub-accounts.',
         referralHint: 'If you don’t have an account yet, sign up with my referral:',
-        referralCta: 'grvt.io/?ref=5LBBEMJ',
+        referralCta: 'grvt.io/?ref=HCAQ5ES',
         saveBtn: 'Save credentials',
         saving: 'Saving & testing…',
         saved: 'GRVT credentials saved',
@@ -1233,7 +1233,7 @@ export const MESSAGES = {
       sameOrigin: '(same origin)',
       auth: 'Auth',
       referralBody:
-        'If you don’t have a GRVT account yet, sign up with my referral code (5LBBEMJ) to get GRVT’s bonuses:',
+        'To use Toro, your GRVT account must have been created with referral code HCAQ5ES:',
       referralCta: 'Sign up on GRVT →',
       account: {
         email: 'Email',

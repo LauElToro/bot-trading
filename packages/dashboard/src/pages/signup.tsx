@@ -4,7 +4,10 @@ import { toast } from 'sonner';
 import { ArrowRight, Eye, EyeOff, LockKeyhole, Mail } from 'lucide-react';
 import { useAuth } from '@/lib/auth-context';
 import { api } from '@/lib/api-client';
-import { GRVT_REFERRAL_URL } from '@/lib/brand';
+import {
+  GRVT_REFERRAL_CODE,
+  GRVT_REFERRAL_URL,
+} from '@/lib/brand';
 import { GoogleSignInButton, isGoogleSignInEnabled } from '@/components/google-sign-in';
 import { useLang } from '@/i18n';
 import {
@@ -33,6 +36,12 @@ const COPY = {
     login: 'Iniciá sesión',
     referral: '¿Todavía no tenés GRVT?',
     referralLink: 'Creá tu cuenta con beneficios',
+    referralTitle: 'Cuenta GRVT vinculada al referido',
+    referralBody:
+      'Para usar Toro, tu cuenta GRVT debe haberse creado desde nuestro enlace con el código HCAQ5ES.',
+    referralCode: 'Código de referido requerido',
+    referralConfirm:
+      'Confirmo que mi cuenta GRVT fue creada con el referido HCAQ5ES.',
     otpError: 'El código es incorrecto, venció o ya fue utilizado.',
     resendError: 'No pudimos reenviar el código. Intentá nuevamente.',
     created: 'Email verificado. Tu cuenta ya está lista.',
@@ -55,6 +64,12 @@ const COPY = {
     login: 'Sign in',
     referral: 'Don’t have GRVT yet?',
     referralLink: 'Create your account with benefits',
+    referralTitle: 'GRVT account linked to the referral',
+    referralBody:
+      'To use Toro, your GRVT account must have been created from our link with code HCAQ5ES.',
+    referralCode: 'Required referral code',
+    referralConfirm:
+      'I confirm my GRVT account was created with referral HCAQ5ES.',
     otpError: 'The code is incorrect, expired, or has already been used.',
     resendError: 'We could not resend the code. Please try again.',
     created: 'Email verified. Your account is ready.',
@@ -70,6 +85,8 @@ export function SignupPage() {
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
   const [accepted, setAccepted] = useState(false);
+  const [referralCode, setReferralCode] = useState('');
+  const [referralConfirmed, setReferralConfirmed] = useState(false);
   const [pending, setPending] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [challenge, setChallenge] = useState<{ id: string; emailHint: string } | null>(null);
@@ -111,6 +128,8 @@ export function SignupPage() {
     password.length >= 8 &&
     password === confirm &&
     accepted &&
+    referralCode.trim().toUpperCase() === GRVT_REFERRAL_CODE &&
+    referralConfirmed &&
     !!tosTexts &&
     !pending;
 
@@ -119,7 +138,7 @@ export function SignupPage() {
     if (!canSubmit) return;
     setPending(true);
     try {
-      const result = await signup(email, password, lang);
+      const result = await signup(email, password, lang, referralCode);
       setChallenge({ id: result.challengeId, emailHint: result.emailHint });
     } catch (err) {
       toast.error((err as Error).message || t('auth.signup.signupFailed'));
@@ -153,13 +172,22 @@ export function SignupPage() {
   }
 
   const handleGoogle = useCallback(async (idToken: string) => {
-    if (!accepted || !tosTexts) {
+    if (
+      !accepted ||
+      !tosTexts ||
+      !referralConfirmed ||
+      referralCode.trim().toUpperCase() !== GRVT_REFERRAL_CODE
+    ) {
       toast.error(t('auth.signup.acceptTermsFirst'));
       return;
     }
     setPending(true);
     try {
-      await loginWithGoogle(idToken, { acceptedTerms: true, tosLang: lang });
+      await loginWithGoogle(idToken, {
+        acceptedTerms: true,
+        tosLang: lang,
+        referralCode,
+      });
       toast.success(t('auth.signup.accountCreated'));
       navigate('/dashboard/onboarding/grvt', { replace: true });
     } catch (err) {
@@ -167,7 +195,16 @@ export function SignupPage() {
     } finally {
       setPending(false);
     }
-  }, [accepted, tosTexts, loginWithGoogle, lang, navigate, t]);
+  }, [
+    accepted,
+    tosTexts,
+    loginWithGoogle,
+    lang,
+    navigate,
+    referralCode,
+    referralConfirmed,
+    t,
+  ]);
 
   const termsBody = tosTexts ? tosTexts[lang] : '';
 
@@ -217,6 +254,48 @@ export function SignupPage() {
             </div>
             {passwordError && <p className="text-xs text-[#b13b2d]">{passwordError}</p>}
 
+            <div className="rounded-lg border border-[#dfc777] bg-[#fff8df] p-3.5">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-xs font-bold text-[#453515]">{copy.referralTitle}</p>
+                  <p className="mt-1 text-[11px] leading-4 text-[#75643f]">{copy.referralBody}</p>
+                </div>
+                <a
+                  href={GRVT_REFERRAL_URL}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="shrink-0 rounded-md border border-[#d2ad43] px-2.5 py-1.5 text-[10px] font-bold text-[#7d5b0e] hover:bg-[#f7e9b7]"
+                >
+                  GRVT ↗
+                </a>
+              </div>
+              <label className="mt-3 block">
+                <span className="mb-1.5 block text-[10px] font-semibold uppercase tracking-wider text-[#76643c]">
+                  {copy.referralCode}
+                </span>
+                <input
+                  type="text"
+                  value={referralCode}
+                  onChange={(event) => setReferralCode(event.target.value.toUpperCase())}
+                  placeholder={GRVT_REFERRAL_CODE}
+                  maxLength={GRVT_REFERRAL_CODE.length}
+                  disabled={pending}
+                  required
+                  className={`${authInputClass} h-10 bg-white font-mono uppercase tracking-[.18em]`}
+                />
+              </label>
+              <label className="mt-3 flex cursor-pointer items-start gap-2 text-[11px] leading-4 text-[#5f5132]">
+                <input
+                  type="checkbox"
+                  checked={referralConfirmed}
+                  onChange={(event) => setReferralConfirmed(event.target.checked)}
+                  disabled={pending}
+                  className="mt-0.5 size-4 accent-[#c79220]"
+                />
+                <span>{copy.referralConfirm}</span>
+              </label>
+            </div>
+
             <details className="rounded-lg border border-[#ded8cf] bg-[#faf8f3]">
               <summary className="cursor-pointer px-4 py-3 text-xs font-semibold text-[#6d6254]">{copy.terms}</summary>
               <div className="border-t border-[#e4ded5] px-4 py-3">
@@ -245,13 +324,24 @@ export function SignupPage() {
               <div className="flex items-center gap-3 text-[10px] uppercase tracking-wider text-[#aaa297]">
                 <span className="h-px flex-1 bg-[#e1dcd3]" />{copy.divider}<span className="h-px flex-1 bg-[#e1dcd3]" />
               </div>
-              <GoogleSignInButton onCredential={handleGoogle} disabled={pending || !accepted || !tosTexts} label="signup_with" locale={lang} />
+              <GoogleSignInButton
+                onCredential={handleGoogle}
+                disabled={
+                  pending ||
+                  !accepted ||
+                  !tosTexts ||
+                  !referralConfirmed ||
+                  referralCode.trim().toUpperCase() !== GRVT_REFERRAL_CODE
+                }
+                label="signup_with"
+                locale={lang}
+              />
             </div>
           )}
 
           <p className="mt-4 text-center text-xs text-[#756a5b]">
             {copy.account}{' '}
-            <Link to="/dashboard/login" className="font-semibold text-[#208a57] hover:underline">{copy.login}</Link>
+            <Link to="/dashboard/login" className="font-semibold text-[#98701b] hover:underline">{copy.login}</Link>
           </p>
           <p className="mt-2 text-center text-[11px] text-[#91877a]">
             {copy.referral}{' '}

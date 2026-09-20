@@ -558,7 +558,11 @@ describe('POST /api/v2/auth/signup — H-5 ADMIN_EMAIL gate', () => {
 
     const res = await request(app)
       .post('/api/v2/auth/signup')
-      .send({ email: 'whoever@example.com', password: 'supersecret' });
+      .send({
+        email: 'whoever@example.com',
+        password: 'supersecret',
+        referral_code: 'HCAQ5ES',
+      });
 
     expect(res.status).toBe(200);
     expect(res.body.requiresOtp).toBe(true);
@@ -574,7 +578,11 @@ describe('POST /api/v2/auth/signup — H-5 ADMIN_EMAIL gate', () => {
 
     const res = await request(app)
       .post('/api/v2/auth/signup')
-      .send({ email: 'OWNER@Example.com', password: 'supersecret' });
+      .send({
+        email: 'OWNER@Example.com',
+        password: 'supersecret',
+        referral_code: 'HCAQ5ES',
+      });
 
     expect(res.status).toBe(200);
     expect(res.body.requiresOtp).toBe(true);
@@ -592,13 +600,30 @@ describe('POST /api/v2/auth/signup — H-5 ADMIN_EMAIL gate', () => {
 
     const res = await request(app)
       .post('/api/v2/auth/signup')
-      .send({ email: 'attacker@example.com', password: 'supersecret' });
+      .send({
+        email: 'attacker@example.com',
+        password: 'supersecret',
+        referral_code: 'HCAQ5ES',
+      });
 
     expect(res.status).toBe(200);
     expect(res.body.requiresOtp).toBe(true);
     expect(gridBotDb.createUser).toHaveBeenCalledWith(
       expect.objectContaining({ is_admin: false })
     );
+  });
+
+  it('rejects signup without the required GRVT referral code', async () => {
+    const gridBotDb = makeGridBotDbWithSignup();
+    const { app } = makeApp(gridBotDb);
+
+    const res = await request(app)
+      .post('/api/v2/auth/signup')
+      .send({ email: 'new@example.com', password: 'supersecret' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('referral_code_required');
+    expect(gridBotDb.createUser).not.toHaveBeenCalled();
   });
 });
 

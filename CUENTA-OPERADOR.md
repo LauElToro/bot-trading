@@ -1,6 +1,6 @@
 # Cuenta operador — solo trading, sin retiro
 
-Si todavía no tenés cuenta en GRVT, registrate con mi referido: [https://grvt.io/?ref=5LBBEMJ](https://grvt.io/?ref=5LBBEMJ)
+Si todavía no tenés cuenta en GRVT, registrate con el referido requerido: [https://grvt.io/?ref=HCAQ5ES](https://grvt.io/?ref=HCAQ5ES)
 
 Yo **no puedo** crear tu API de GRVT: hace falta tu login en [app.grvt.io](https://app.grvt.io) y confirmar en la wallet. Lo que sí está listo es la cuenta local del bot y el modelo correcto de permisos.
 
@@ -34,7 +34,7 @@ No pegues secretos de GRVT en el chat.
 
 Guía oficial: [How do I generate an API Key?](https://help.grvt.io/en/articles/9636561-how-do-i-generate-an-api-key)
 
-1. Entrá a [app.grvt.io](https://app.grvt.io) (cuenta nueva: [grvt.io/?ref=5LBBEMJ](https://grvt.io/?ref=5LBBEMJ)).
+1. Entrá a [app.grvt.io](https://app.grvt.io) (cuenta nueva: [grvt.io/?ref=HCAQ5ES](https://grvt.io/?ref=HCAQ5ES)).
 2. Creá o usá un **Trading Account / sub-account** de trading (no el vault / funding master).
 3. Depositá ahí solo el capital que estés dispuesto a operar. El retiro lo hacés **vos a mano** desde la web, nunca el bot.
 4. Arriba a la derecha → tu inicial → **Overview → API Keys** → **Create**.

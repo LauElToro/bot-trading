@@ -40,8 +40,14 @@ interface AuthCtx {
   loginWithGoogle: (idToken: string, extras?: {
     acceptedTerms?: boolean;
     tosLang?: 'es' | 'en';
+    referralCode?: string;
   }) => Promise<void>;
-  signup: (email: string, password: string, tosLang?: 'es' | 'en') => Promise<OtpChallenge>;
+  signup: (
+    email: string,
+    password: string,
+    tosLang?: 'es' | 'en',
+    referralCode?: string
+  ) => Promise<OtpChallenge>;
   verifyOtp: (challengeId: string, code: string, email: string) => Promise<void>;
   resendOtp: (challengeId: string, lang?: 'es' | 'en') => Promise<void>;
   logout: () => void;
@@ -138,7 +144,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const loginWithGoogle = useCallback(async (
     idToken: string,
-    extras: { acceptedTerms?: boolean; tosLang?: 'es' | 'en' } = {}
+    extras: {
+      acceptedTerms?: boolean;
+      tosLang?: 'es' | 'en';
+      referralCode?: string;
+    } = {}
   ) => {
     const res = await api.loginWithGoogle(idToken, extras);
     applyAccessToken(res.token);
@@ -156,9 +166,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const signup = useCallback(async (
     email: string,
     password: string,
-    tosLang: 'es' | 'en' = 'en'
+    tosLang: 'es' | 'en' = 'en',
+    referralCode = ''
   ) => {
-    return api.signup(email, password, tosLang);
+    return api.signup(email, password, tosLang, referralCode);
   }, []);
 
   const value = useMemo<AuthCtx>(

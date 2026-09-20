@@ -207,7 +207,7 @@ export function LoginPage() {
 
           <p className="mt-5 text-center text-xs text-[#756a5b]">
             {copy.noAccount}{' '}
-            <Link to="/dashboard/signup" className="font-semibold text-[#208a57] hover:underline">
+            <Link to="/dashboard/signup" className="font-semibold text-[#98701b] hover:underline">
               {copy.create}
             </Link>
           </p>

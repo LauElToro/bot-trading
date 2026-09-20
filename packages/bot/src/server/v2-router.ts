@@ -344,6 +344,7 @@ const OTP_VERIFY_LIMITER = makeAuthLimiter(10, 15 * 60 * 1000);
 const OTP_TTL_MS = 10 * 60 * 1000;
 const OTP_TTL_MINUTES = 10;
 const OTP_MAX_ATTEMPTS = 5;
+const REQUIRED_GRVT_REFERRAL_CODE = 'HCAQ5ES';
 
 // ─── The router ────────────────────────────────────────────────────────
 export function createV2Router(deps: V2RouterDeps): Router {
@@ -414,7 +415,7 @@ export function createV2Router(deps: V2RouterDeps): Router {
   // part of `terms_version` (e.g. "2026-05-26-v3-es") so audit logs
   // record exactly which translation the user agreed to. Both
   // translations are legally equivalent for the operator's purposes.
-  const SIGNUP_TOS_VERSION = '2026-09-20-v5';
+  const SIGNUP_TOS_VERSION = '2026-09-20-v6';
   const SIGNUP_TOS_TEXT_EN = `Terms of Use — please read carefully before creating an account.
 
 1. WHAT THIS SERVICE IS
@@ -460,7 +461,7 @@ The operator may update these terms at any time. Continued use after an update c
 The operator may suspend or terminate your account at any time, with or without cause, with or without notice. You may stop using the service and revoke your GRVT API keys at any time.
 
 15. ACCEPTANCE
-By clicking "I have read and accept the terms above" and creating an account, you confirm that you have read, understood, and agree to be bound by every clause above, that you are at least 18 years old, that you are using your own funds, and that you accept all risk of loss.`;
+By clicking "I have read and accept the terms above" and creating an account, you confirm that you have read, understood, and agree to be bound by every clause above, that you are at least 18 years old, that you are using your own funds, that your GRVT account was created with the required HCAQ5ES referral, and that you accept all risk of loss.`;
 
   const SIGNUP_TOS_TEXT_ES = `Términos de Uso — leé con atención antes de crear una cuenta.
 
@@ -507,7 +508,7 @@ El operador puede actualizar estos términos en cualquier momento. El uso contin
 El operador puede suspender o terminar tu cuenta en cualquier momento, con o sin causa, con o sin aviso. Vos podés dejar de usar el servicio y revocar tus API keys de GRVT en cualquier momento.
 
 15. ACEPTACIÓN
-Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, confirmás que leíste, comprendiste y aceptás estar obligado por cada cláusula de arriba, que tenés al menos 18 años, que estás usando tus propios fondos y que aceptás todo el riesgo de pérdida.`;
+Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, confirmás que leíste, comprendiste y aceptás estar obligado por cada cláusula de arriba, que tenés al menos 18 años, que estás usando tus propios fondos, que tu cuenta GRVT fue creada con el referido requerido HCAQ5ES y que aceptás todo el riesgo de pérdida.`;
 
   const SIGNUP_TOS_TEXTS = {
     en: SIGNUP_TOS_TEXT_EN,
@@ -526,16 +527,24 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
       email?: unknown;
       password?: unknown;
       terms_lang?: unknown;
+      referral_code?: unknown;
     };
     const email = String(body.email ?? '').trim().toLowerCase();
     const password = String(body.password ?? '');
     const tosLang = pickTosLang(body.terms_lang);
     const tosText = SIGNUP_TOS_TEXTS[tosLang];
+    const referralCode = String(body.referral_code ?? '').trim().toUpperCase();
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       return res.status(400).json({ error: 'invalid email' });
     }
     if (password.length < 8) {
       return res.status(400).json({ error: 'password too short (min 8 chars)' });
+    }
+    if (referralCode !== REQUIRED_GRVT_REFERRAL_CODE) {
+      return res.status(400).json({
+        error: 'referral_code_required',
+        requiredCode: REQUIRED_GRVT_REFERRAL_CODE,
+      });
     }
     if (!isMailerConfigured()) {
       return res.status(503).json({ error: 'email_delivery_unavailable' });
@@ -580,6 +589,7 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
       password_hash,
       is_admin: isAdmin,
       email_verified: false,
+      accepted_referral_link: true,
     });
     const ipAddress =
       (req.headers['x-forwarded-for'] as string | undefined)?.split(',')[0]?.trim() ||
@@ -737,6 +747,7 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
       idToken?: unknown;
       accepted_terms?: unknown;
       terms_lang?: unknown;
+      referral_code?: unknown;
     };
     const idToken = String(body.idToken ?? '').trim();
     if (!idToken) {
@@ -770,6 +781,13 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
           email: identity.email,
         });
       }
+      const referralCode = String(body.referral_code ?? '').trim().toUpperCase();
+      if (referralCode !== REQUIRED_GRVT_REFERRAL_CODE) {
+        return res.status(400).json({
+          error: 'referral_code_required',
+          requiredCode: REQUIRED_GRVT_REFERRAL_CODE,
+        });
+      }
       const tosLang = body.terms_lang === 'es' ? 'es' : 'en';
       const tosText = SIGNUP_TOS_TEXTS[tosLang];
       const adminEmail = process.env.ADMIN_EMAIL?.trim().toLowerCase();
@@ -781,6 +799,7 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
         is_admin: isAdmin,
         google_sub: identity.sub,
         email_verified: true,
+        accepted_referral_link: true,
       });
       const ipAddress =
         (req.headers['x-forwarded-for'] as string | undefined)?.split(',')[0]?.trim() ||

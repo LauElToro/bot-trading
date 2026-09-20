@@ -69,7 +69,7 @@ export function AuthShell({
                 <p className="font-mono text-[9px] tracking-[.16em] text-[#8f806b]">ETH / USDT</p>
                 <p className="mt-1 font-mono text-xl">$3,581.60</p>
               </div>
-              <span className="flex items-center gap-2 font-mono text-[9px] text-[#3dba74]">
+              <span className="flex items-center gap-2 font-mono text-[9px] text-[#d7a52f]">
                 <Radio className="size-3" />
                 LIVE
               </span>
@@ -109,7 +109,7 @@ export function AuthShell({
           <div className="relative mt-auto grid gap-2 pt-8">
             {copy.checks.map((item) => (
               <div key={item} className="flex items-center gap-2 text-xs text-[#b9ab96]">
-                <Check className="size-3.5 text-[#3dba74]" />
+                <Check className="size-3.5 text-[#d7a52f]" />
                 {item}
               </div>
             ))}
@@ -142,7 +142,7 @@ export function AuthShell({
             {children}
           </div>
           <div className="flex items-center justify-center gap-2 text-[10px] text-[#8b8174]">
-            <ShieldCheck className="size-3.5 text-[#208a57]" />
+            <ShieldCheck className="size-3.5 text-[#b9871d]" />
             {copy.protected}
             <span aria-hidden="true">·</span>
             <LockKeyhole className="size-3" />

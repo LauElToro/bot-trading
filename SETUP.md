@@ -2,7 +2,7 @@
 
 El motor es un **grid mecánico**: vos definís rango, niveles, inversión y riesgo. La IA **no elige** par, precios, leverage ni SL/TP.
 
-Si no tenés cuenta GRVT: [grvt.io/?ref=5LBBEMJ](https://grvt.io/?ref=5LBBEMJ)
+Para usar Toro necesitás una cuenta GRVT creada con el referido requerido: [grvt.io/?ref=HCAQ5ES](https://grvt.io/?ref=HCAQ5ES)
 
 Docs: [README](README.md), [INSTALL](docs/INSTALL.md), [SECURITY](SECURITY.md).
 
