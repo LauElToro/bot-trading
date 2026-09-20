@@ -5,7 +5,7 @@ import { ArrowRight, Eye, EyeOff, LockKeyhole, Mail } from 'lucide-react';
 import { useAuth } from '@/lib/auth-context';
 import { ApiError } from '@/lib/api-types';
 import { GRVT_REFERRAL_URL } from '@/lib/brand';
-import { GoogleSignInButton, isGoogleSignInEnabled } from '@/components/google-sign-in';
+import { GoogleSignInButton } from '@/components/google-sign-in';
 import { useLang, useT } from '@/i18n';
 import {
   AuthShell,
@@ -194,16 +194,14 @@ export function LoginPage() {
             </button>
           </form>
 
-          {isGoogleSignInEnabled() && (
-            <div className="mt-5 space-y-4">
-              <div className="flex items-center gap-3 text-[10px] uppercase tracking-wider text-text-disabled">
-                <span className="h-px flex-1 bg-border-subtle" />
-                {copy.divider}
-                <span className="h-px flex-1 bg-border-subtle" />
-              </div>
-              <GoogleSignInButton onCredential={handleGoogle} disabled={pending} label="signin_with" locale={lang} />
+          <div className="mt-5 space-y-4">
+            <div className="flex items-center gap-3 text-[10px] uppercase tracking-wider text-text-disabled">
+              <span className="h-px flex-1 bg-border-subtle" />
+              {copy.divider}
+              <span className="h-px flex-1 bg-border-subtle" />
             </div>
-          )}
+            <GoogleSignInButton onCredential={handleGoogle} disabled={pending} label="signin_with" locale={lang} />
+          </div>
 
           <p className="mt-5 text-center text-xs text-text-muted">
             {copy.noAccount}{' '}

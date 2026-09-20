@@ -921,6 +921,18 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
     });
   });
 
+  // Public runtime configuration. OAuth client IDs are public identifiers,
+  // not secrets; exposing this lets a separately deployed dashboard enable
+  // Google Sign-In without baking the ID into its Vercel build.
+  router.get('/auth/config', (_req, res) => {
+    const googleClientId = process.env.GOOGLE_CLIENT_ID?.trim() || null;
+    res.setHeader('Cache-Control', 'public, max-age=300');
+    res.json({
+      googleAuthEnabled: !!googleClientId,
+      googleClientId,
+    });
+  });
+
   // E.9 — Password reset.
   //
   // Two endpoints, both PUBLIC (must work without a JWT):

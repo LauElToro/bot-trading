@@ -1,4 +1,5 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { api } from '@/lib/api-client';
 
 declare global {
   interface Window {
@@ -27,10 +28,7 @@ declare global {
 }
 
 const GSI_SRC = 'https://accounts.google.com/gsi/client';
-
-export function isGoogleSignInEnabled(): boolean {
-  return !!import.meta.env.VITE_GOOGLE_CLIENT_ID;
-}
+const BUILD_TIME_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined;
 
 export function GoogleSignInButton({
   onCredential,
@@ -44,7 +42,28 @@ export function GoogleSignInButton({
   locale?: string;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
-  const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined;
+  const [clientId, setClientId] = useState<string | undefined>(BUILD_TIME_CLIENT_ID);
+  const [configResolved, setConfigResolved] = useState(!!BUILD_TIME_CLIENT_ID);
+
+  useEffect(() => {
+    if (BUILD_TIME_CLIENT_ID) return;
+    let cancelled = false;
+    api.getAuthConfig()
+      .then((config) => {
+        if (!cancelled && config?.googleAuthEnabled && config.googleClientId) {
+          setClientId(config.googleClientId);
+        }
+      })
+      .catch(() => {
+        // Keep the visible unavailable state; password login remains usable.
+      })
+      .finally(() => {
+        if (!cancelled) setConfigResolved(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (!clientId || !hostRef.current || disabled) return;
@@ -81,7 +100,28 @@ export function GoogleSignInButton({
     if (!existing) document.head.appendChild(script);
   }, [clientId, disabled, label, locale, onCredential]);
 
-  if (!clientId) return null;
+  if (!clientId) {
+    const text = label === 'signup_with'
+      ? (locale === 'es' ? 'Registrarse con Google' : 'Sign up with Google')
+      : (locale === 'es' ? 'Continuar con Google' : 'Continue with Google');
+    return (
+      <div>
+        <button
+          type="button"
+          disabled
+          className="flex h-10 w-full items-center justify-center gap-3 rounded border border-border-default bg-bg-base text-sm text-text-secondary opacity-60"
+        >
+          <span className="font-bold text-primary" aria-hidden="true">G</span>
+          {configResolved ? text : `${text}…`}
+        </button>
+        {configResolved && (
+          <p className="mt-1.5 text-center text-[10px] text-text-disabled">
+            {locale === 'es' ? 'Google todavía no está configurado.' : 'Google is not configured yet.'}
+          </p>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div

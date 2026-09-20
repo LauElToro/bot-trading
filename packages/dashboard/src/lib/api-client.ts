@@ -442,6 +442,12 @@ export const api = {
       lastLoginAt: number | null;
     }>('/auth/me'),
 
+  getAuthConfig: () =>
+    request<{
+      googleAuthEnabled: boolean;
+      googleClientId: string | null;
+    }>('/auth/config'),
+
   getTos: async () => {
     type TosResponse = {
       version: string;

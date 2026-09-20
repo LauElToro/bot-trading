@@ -8,7 +8,7 @@ import {
   GRVT_REFERRAL_CODE,
   GRVT_REFERRAL_URL,
 } from '@/lib/brand';
-import { GoogleSignInButton, isGoogleSignInEnabled } from '@/components/google-sign-in';
+import { GoogleSignInButton } from '@/components/google-sign-in';
 import { useLang } from '@/i18n';
 import {
   AuthShell,
@@ -329,25 +329,23 @@ export function SignupPage() {
             </button>
           </form>
 
-          {isGoogleSignInEnabled() && (
-            <div className="mt-4 space-y-3">
-              <div className="flex items-center gap-3 text-[10px] uppercase tracking-wider text-text-disabled">
-                <span className="h-px flex-1 bg-border-subtle" />{copy.divider}<span className="h-px flex-1 bg-border-subtle" />
-              </div>
-              <GoogleSignInButton
-                onCredential={handleGoogle}
-                disabled={
-                  pending ||
-                  !accepted ||
-                  !tosTexts ||
-                  !referralConfirmed ||
-                  referralCode.trim().toUpperCase() !== GRVT_REFERRAL_CODE
-                }
-                label="signup_with"
-                locale={lang}
-              />
+          <div className="mt-4 space-y-3">
+            <div className="flex items-center gap-3 text-[10px] uppercase tracking-wider text-text-disabled">
+              <span className="h-px flex-1 bg-border-subtle" />{copy.divider}<span className="h-px flex-1 bg-border-subtle" />
             </div>
-          )}
+            <GoogleSignInButton
+              onCredential={handleGoogle}
+              disabled={
+                pending ||
+                !accepted ||
+                !tosTexts ||
+                !referralConfirmed ||
+                referralCode.trim().toUpperCase() !== GRVT_REFERRAL_CODE
+              }
+              label="signup_with"
+              locale={lang}
+            />
+          </div>
 
           <p className="mt-4 text-center text-xs text-text-muted">
             {copy.account}{' '}
