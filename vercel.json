@@ -1,7 +1,7 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": null,
-  "installCommand": "npm ci",
+  "installCommand": "npm ci --include=dev --workspace=@grvt-grid/dashboard --include-workspace-root",
   "buildCommand": "VITE_BASE_PATH=/ npm run build --workspace=@grvt-grid/dashboard",
   "outputDirectory": "packages/dashboard/dist",
   "rewrites": [
