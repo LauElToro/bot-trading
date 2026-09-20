@@ -3,6 +3,23 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import path from 'node:path';
+import fs from 'node:fs';
+
+// Bundle the authoritative signup terms as an offline fallback. The dashboard
+// normally fetches them from the API, but a stale backend or a missing Vercel
+// API URL must not disable legal acceptance. Reading the backend source here
+// keeps the fallback byte-for-byte identical to the text whose hash is stored.
+const termsSource = fs.readFileSync(
+  path.resolve(__dirname, '../bot/src/server/v2-router.ts'),
+  'utf8'
+);
+const termsVersion = termsSource.match(/const SIGNUP_TOS_VERSION = '([^']+)'/)?.[1];
+const termsEn = termsSource.match(/const SIGNUP_TOS_TEXT_EN = `([\s\S]*?)`;/)?.[1];
+const termsEs = termsSource.match(/const SIGNUP_TOS_TEXT_ES = `([\s\S]*?)`;/)?.[1];
+
+if (!termsVersion || !termsEn || !termsEs) {
+  throw new Error('Unable to extract the authoritative signup terms');
+}
 
 // Vite config for the Toro dashboard.
 // - React 19 + Tailwind v4 plugin (no PostCSS config needed)
@@ -14,6 +31,13 @@ export default defineConfig({
   // /dashboard. Assets therefore use root-relative URLs in every deployment.
   base: process.env.VITE_BASE_PATH ?? '/',
   plugins: [react(), tailwindcss()],
+  define: {
+    __TORO_SIGNUP_TOS__: JSON.stringify({
+      version: termsVersion,
+      text: termsEn,
+      texts: { en: termsEn, es: termsEs },
+    }),
+  },
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),

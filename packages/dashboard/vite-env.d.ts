@@ -1,5 +1,11 @@
 /// <reference types="vite/client" />
 
+declare const __TORO_SIGNUP_TOS__: {
+  version: string;
+  text: string;
+  texts: { en: string; es: string };
+};
+
 interface ImportMetaEnv {
   readonly BASE_URL: string;
   readonly MODE: string;

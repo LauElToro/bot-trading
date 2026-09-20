@@ -442,12 +442,30 @@ export const api = {
       lastLoginAt: number | null;
     }>('/auth/me'),
 
-  getTos: () =>
-    request<{
+  getTos: async () => {
+    type TosResponse = {
       version: string;
       text: string;
       texts?: { en: string; es: string };
-    }>('/auth/tos'),
+    };
+    try {
+      const remote = await request<TosResponse>('/auth/tos');
+      // A frontend-only Vercel rewrite can answer this API URL with index.html
+      // and HTTP 200. request() then yields null, so validate the shape too.
+      if (
+        remote &&
+        typeof remote.version === 'string' &&
+        typeof remote.text === 'string' &&
+        (!remote.texts ||
+          (typeof remote.texts.en === 'string' && typeof remote.texts.es === 'string'))
+      ) {
+        return remote;
+      }
+    } catch {
+      // The exact server terms are embedded at build time as a safe fallback.
+    }
+    return __TORO_SIGNUP_TOS__;
+  },
 
   saveGrvtCredentials: (body: {
     apiKey: string;
