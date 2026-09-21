@@ -11,6 +11,8 @@ import { ConfirmHost } from './components/primitives/confirm-dialog';
 import { OverviewPage } from './pages/overview';
 import { BotsListPage } from './pages/bots-list';
 import { SettingsPage } from './pages/settings';
+import { PodiumPage } from './pages/podium';
+import { GuidePage } from './pages/guide';
 import { LoginPage } from './pages/login';
 import { SignupPage } from './pages/signup';
 import { ForgotPasswordPage } from './pages/forgot-password';
@@ -178,6 +180,22 @@ export default function App() {
                     <Suspense fallback={<RouteFallback />}>
                       <BacktestPage />
                     </Suspense>
+                  </ErrorBoundary>
+                }
+              />
+              <Route
+                path="podio"
+                element={
+                  <ErrorBoundary>
+                    <PodiumPage />
+                  </ErrorBoundary>
+                }
+              />
+              <Route
+                path="guia"
+                element={
+                  <ErrorBoundary>
+                    <GuidePage />
                   </ErrorBoundary>
                 }
               />

@@ -263,6 +263,31 @@ export interface FundingRow {
   created_at: string;
 }
 
+export interface WizardPreset {
+  pair: string;
+  direction: 'long' | 'short';
+  leverage: number;
+  lower_price: number;
+  upper_price: number;
+  num_grids: number;
+  investment_usdt: number;
+  virtual_enabled?: boolean;
+  active_window_size?: number;
+  sl_pct?: number;
+  tp_pct?: number;
+  auto_shift_enabled?: boolean;
+  auto_shift_pct?: number;
+  compound_pct?: number;
+  copiedFrom?: {
+    publishedId: number;
+    authorName: string;
+    rangeAdapted?: boolean;
+    originalLower?: number;
+    originalUpper?: number;
+    markPrice?: number;
+  };
+}
+
 export interface ValidateBotInput {
   pair: string;
   direction: 'long' | 'short';
@@ -332,6 +357,52 @@ export type CandleInterval =
   | 'CI_1_H'
   | 'CI_4_H'
   | 'CI_1_D';
+
+export interface UserProfile {
+  id: string;
+  email: string;
+  isAdmin: boolean;
+  hasGrvtCreds: boolean;
+  createdAt: number;
+  lastLoginAt: number | null;
+  displayName: string | null;
+  bio: string | null;
+  hasAvatar: boolean;
+  avatarUpdatedAt: number | null;
+}
+
+export interface CommunityAuthor {
+  id: string;
+  name: string;
+  hasAvatar: boolean;
+}
+
+export interface CommunityBot {
+  id: number;
+  rank: number;
+  title: string;
+  pair: string;
+  direction: 'long' | 'short';
+  leverage: number;
+  lowerPrice: number;
+  upperPrice: number;
+  rangeWidthPct?: number;
+  numGrids: number;
+  investmentUsdt: number;
+  virtualEnabled: boolean;
+  activeWindowSize: number | null;
+  slPct: number | null;
+  tpPct: number | null;
+  autoShiftEnabled: boolean;
+  autoShiftPct: number | null;
+  compoundPct: number | null;
+  pnlUsdt: number;
+  pnlPct: number;
+  copiesCount: number;
+  publishedAt: number;
+  isAuthorTotal?: boolean;
+  author: CommunityAuthor;
+}
 
 export interface HealthV2 {
   status: 'ok';

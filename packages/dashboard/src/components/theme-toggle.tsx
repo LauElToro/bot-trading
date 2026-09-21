@@ -14,7 +14,7 @@ export function ThemeToggle({ className }: { className?: string }) {
       aria-label={`Switch to ${nextTheme} theme`}
       title={`Switch to ${nextTheme} theme`}
       className={cn(
-        'grid size-8 place-items-center rounded-md border border-border-subtle',
+        'grid size-8 place-items-center border border-border-subtle',
         'bg-bg-elevated text-text-secondary transition-colors',
         'hover:border-primary hover:text-primary',
         className

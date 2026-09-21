@@ -84,7 +84,7 @@ const COPY = {
     openBody:
       'Las credenciales GRVT se cifran con AES-256-GCM y se descifran en memoria únicamente al firmar operaciones.',
     source: 'Seguridad por diseño',
-    architecture: ['Motor + REST', 'WebSocket', 'PostgreSQL', 'Telegram opcional'],
+    architecture: ['Motor + REST', 'WebSocket', 'PostgreSQL', 'Alertas por email'],
     dashboardEyebrow: 'UNA SOLA SUPERFICIE',
     dashboardTitle: 'Del rango a la ejecución, sin perder contexto.',
     dashboardBody:
@@ -195,7 +195,7 @@ const COPY = {
     openBody:
       'GRVT credentials use AES-256-GCM encryption and are decrypted in memory only when signing operations.',
     source: 'Security by design',
-    architecture: ['Engine + REST', 'WebSocket', 'PostgreSQL', 'Optional Telegram'],
+    architecture: ['Engine + REST', 'WebSocket', 'PostgreSQL', 'Email alerts'],
     dashboardEyebrow: 'ONE OPERATING SURFACE',
     dashboardTitle: 'From range to execution, without losing context.',
     dashboardBody:

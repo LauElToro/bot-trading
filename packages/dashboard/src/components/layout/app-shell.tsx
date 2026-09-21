@@ -2,21 +2,12 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Outlet, useNavigate } from 'react-router-dom';
 import { Header } from './header';
 import { Sidebar } from './sidebar';
-import { BottomNav } from './bottom-nav';
 import { KeyboardShortcutsModal } from '../keyboard-shortcuts-modal';
 import { useUiStore } from '@/stores/ui-store';
 
-// App-wide chrome: header on top, sidebar on the left (desktop only),
-// main content via Outlet, bottom nav on mobile only.
-//
-// Skip link is the first focusable element so keyboard / screen-reader users
-// can jump straight to main content (WCAG 2.4.1).
-//
-// E.2: global keyboard shortcuts with vim-style two-key chords
-// (g→o, g→b, g→s, n→b). Single keys: ?, t, Esc.
-
 export function AppShell() {
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const [navOpen, setNavOpen] = useState(false);
   const navigate = useNavigate();
   const toggleTheme = useUiStore((s) => s.toggleTheme);
   const pendingChord = useRef<string | null>(null);
@@ -24,14 +15,12 @@ export function AppShell() {
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
-      // Skip when user is typing in an input/textarea/select
       const tag = (e.target as HTMLElement).tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
       if ((e.target as HTMLElement).isContentEditable) return;
 
       const key = e.key.toLowerCase();
 
-      // Chord resolution: if we have a pending prefix, resolve it
       if (pendingChord.current) {
         const chord = pendingChord.current + key;
         pendingChord.current = null;
@@ -40,15 +29,16 @@ export function AppShell() {
         switch (chord) {
           case 'go': navigate('/dashboard'); return;
           case 'gb': navigate('/dashboard/bots'); return;
+          case 'gp': navigate('/dashboard/podio'); return;
+          case 'gh': navigate('/dashboard/guia'); return;
           case 'gs': navigate('/dashboard/settings'); return;
           case 'nb':
             window.dispatchEvent(new CustomEvent('wizard:open'));
             return;
         }
-        return; // unknown chord — swallow silently
+        return;
       }
 
-      // Chord start: g or n sets a pending prefix
       if (key === 'g' || key === 'n') {
         pendingChord.current = key;
         chordTimer.current = setTimeout(() => {
@@ -57,7 +47,6 @@ export function AppShell() {
         return;
       }
 
-      // Single-key shortcuts
       switch (key) {
         case '?':
           setShortcutsOpen(true);
@@ -67,10 +56,11 @@ export function AppShell() {
           break;
         case 'escape':
           setShortcutsOpen(false);
+          setNavOpen(false);
           break;
       }
     },
-    [navigate, toggleTheme]
+    [navigate, toggleTheme],
   );
 
   useEffect(() => {
@@ -79,25 +69,27 @@ export function AppShell() {
   }, [handleKeyDown]);
 
   return (
-    <div className="flex flex-col min-h-dvh bg-bg-base text-text-primary">
+    <div className="flex min-h-dvh bg-bg-base text-text-primary">
       <a
         href="#main-content"
-        className="absolute left-2 top-2 z-50 rounded-md bg-primary px-3 py-2 text-xs font-semibold text-bg-base -translate-y-16 focus-visible:translate-y-0 transition-transform"
+        className="absolute left-2 top-2 z-50 -translate-y-16 bg-primary px-3 py-2 text-xs font-semibold text-bg-base transition-transform focus-visible:translate-y-0"
       >
         Skip to main content
       </a>
-      <Header />
-      <div className="flex flex-1 min-h-0">
-        <Sidebar />
+      <Sidebar open={navOpen} onClose={() => setNavOpen(false)} />
+      <div className="flex min-w-0 flex-1 flex-col">
+        <Header onOpenNav={() => setNavOpen(true)} />
         <main
           id="main-content"
           tabIndex={-1}
-          className="flex-1 min-w-0 overflow-y-auto p-4 md:p-6 pb-20 md:pb-6 focus:outline-none"
+          className="relative flex-1 min-w-0 overflow-y-auto p-4 md:p-8 focus:outline-none"
         >
-          <Outlet />
+          <div className="pointer-events-none absolute inset-0 opacity-[.035] [background-image:linear-gradient(var(--color-text-primary)_1px,transparent_1px),linear-gradient(90deg,var(--color-text-primary)_1px,transparent_1px)] [background-size:48px_48px]" />
+          <div className="relative mx-auto w-full max-w-6xl">
+            <Outlet />
+          </div>
         </main>
       </div>
-      <BottomNav />
       <KeyboardShortcutsModal
         open={shortcutsOpen}
         onClose={() => setShortcutsOpen(false)}

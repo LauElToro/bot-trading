@@ -343,6 +343,48 @@ export function computeLiqPriceLocal(bot: GridBot): number | null {
   }
 }
 
+// Covers both legs at the backtest's default 0.05% fee per fill. Grid
+// orders are post-only and may receive a rebate, but using the conservative
+// round-trip cost prevents a nominally green close from settling net red.
+export const NO_LOSS_FEE_BUFFER_PCT = 0.10;
+
+/**
+ * Return the break-even limit when a grid order would reduce the current
+ * directional position without an explicit stop-loss. `null` means the
+ * order is not a protected close (or the user explicitly enabled SL).
+ */
+export function getNoLossCloseLimit(
+  bot: Pick<GridBot, 'direction' | 'sl_pct' | 'position_size' | 'avg_entry_price'>,
+  side: 'buy' | 'sell',
+): { kind: 'minimum' | 'maximum'; price: number } | null {
+  if (bot.sl_pct != null || !Number.isFinite(bot.avg_entry_price) || bot.avg_entry_price <= 0) {
+    return null;
+  }
+
+  const feeBuffer = NO_LOSS_FEE_BUFFER_PCT / 100;
+  const isLongClose = side === 'sell' && bot.position_size > 0;
+  if (isLongClose) {
+    return { kind: 'minimum', price: bot.avg_entry_price * (1 + feeBuffer) };
+  }
+
+  const isShortClose = side === 'buy' && bot.position_size < 0;
+  if (isShortClose) {
+    return { kind: 'maximum', price: bot.avg_entry_price * (1 - feeBuffer) };
+  }
+
+  return null;
+}
+
+export function wouldCloseAtLossWithoutStopLoss(
+  bot: Pick<GridBot, 'direction' | 'sl_pct' | 'position_size' | 'avg_entry_price'>,
+  side: 'buy' | 'sell',
+  price: number,
+): boolean {
+  const limit = getNoLossCloseLimit(bot, side);
+  if (!limit) return false;
+  return limit.kind === 'minimum' ? price < limit.price : price > limit.price;
+}
+
 /**
  * Grid Trading Engine
  * Maneja la lógica completa de grid trading con safeguards
@@ -2130,6 +2172,10 @@ export class GridBotInstance {
   // level is treated normally — if GRVT still doesn't show it, the order
   // was cancelled or filled, and the normal flow takes over.
   private recentlyPlaced = new Map<number, number>();
+  // Levels cancelled by the no-loss guard are ignored long enough for GRVT
+  // fill_history to age out, otherwise a cancellation can be mistaken for a
+  // fill and trigger a counter-order.
+  private recentlyNoLossCancelled = new Map<number, number>();
   private injectedClient: GRVTClient | null = null;
 
   constructor(bot: GridBot, client?: GRVTClient) {
@@ -2372,6 +2418,8 @@ export class GridBotInstance {
           position_size: totalQuantityNeeded,
           avg_entry_price: currentPrice
         });
+        this.bot.position_size = totalQuantityNeeded;
+        this.bot.avg_entry_price = currentPrice;
         
         log.info(`✅ [DRY RUN] Bot ${this.bot.id}: Compra inicial simulada exitosamente`);
         return;
@@ -2418,6 +2466,8 @@ export class GridBotInstance {
           position_size: totalFilled,
           avg_entry_price: avgPrice
         });
+        this.bot.position_size = totalFilled;
+        this.bot.avg_entry_price = avgPrice;
 
         // Registrar trades
         for (const fill of initialFills) {
@@ -2577,6 +2627,15 @@ export class GridBotInstance {
   async placeGridOrder(level: GridLevel): Promise<void> {
     log.debug(`placeGridOrder INICIADO - Bot: ${this.bot.id}, Level: ${level.level_index}`);
     log.debug(`placeGridOrder - Orden: ${level.side} ${level.quantity} ${this.bot.pair} @ $${level.price}`);
+
+    const closeLimit = getNoLossCloseLimit(this.bot, level.side);
+    if (wouldCloseAtLossWithoutStopLoss(this.bot, level.side, level.price)) {
+      const comparison = closeLimit?.kind === 'minimum' ? 'mínimo' : 'máximo';
+      const limitPrice = closeLimit?.price.toFixed(2) ?? 'desconocido';
+      throw new Error(
+        `NO_LOSS_GUARD: ${level.side} @ $${level.price.toFixed(2)} bloqueada; break-even ${comparison} $${limitPrice}`
+      );
+    }
 
     // Record placement time for GRVT-lag guard in monitor. Set BEFORE the
     // async GRVT call so even if the call itself takes a while, subsequent
@@ -2754,11 +2813,29 @@ export class GridBotInstance {
     if (freshBot) this.bot = freshBot;
     
     // 1. Get open orders from GRVT
-    const openOrders = await this.grvt.getOpenOrders(this.bot.pair);
+    let openOrders = await this.grvt.getOpenOrders(this.bot.pair);
     
     // 2. Get current price from the last ticker
     const ticker = await this.grvt.getTicker(this.bot.pair);
     const currentPrice = parseFloat(ticker.last_price);
+
+    // Refresh the live average before evaluating any closing grid order.
+    // A lower buy fill changes the exchange-wide average immediately; using
+    // the previous monitor tick here is enough to place a red counter-sell.
+    try {
+      const livePosition = await this.grvt.getPosition(this.bot.pair);
+      if (livePosition) {
+        this.bot.position_size = parseFloat(livePosition.size);
+        this.bot.avg_entry_price = parseFloat(livePosition.entry_price);
+      } else {
+        this.bot.position_size = 0;
+      }
+    } catch (error) {
+      log.warn(
+        { botId: this.bot.id, err: (error as Error).message },
+        'No-loss guard is using the last persisted position'
+      );
+    }
 
     // 2.5. SAFEGUARD: liquidation proximity check (C.4). Opt-in per bot.
     // Throws a SAFEGUARD:<action>: error that monitorAllBots() parses to
@@ -2800,6 +2877,55 @@ export class GridBotInstance {
       }
     }
 
+    // Read levels before reconciliation so the no-loss guard can cancel
+    // already-open closing orders and identify their DB levels.
+    const gridLevels = await db.getGridLevels(this.bot.id);
+    const gridStep = (this.bot.upper_price - this.bot.lower_price) / this.bot.num_grids;
+    const matchTolerance = Math.min(0.05, gridStep / 3);
+
+    // A position's average can move after lower buys/higher shorts fill.
+    // Cancel closing orders that were safe when placed but are now below
+    // break-even. Keep failed cancellations in the working set and retry on
+    // the next tick; only confirmed cancellations are removed locally.
+    const retainedOpenOrders: typeof openOrders = [];
+    for (const order of openOrders) {
+      const leg = (order as any).legs?.[0];
+      const price = parseFloat(leg?.limit_price ?? 'NaN');
+      const rawSide = typeof leg?.is_buying_asset === 'boolean'
+        ? (leg.is_buying_asset ? 'buy' : 'sell')
+        : (order as any).side;
+      const level = Number.isFinite(price)
+        ? gridLevels.find(l => Math.abs(l.price - price) < matchTolerance)
+        : undefined;
+      if (
+        (rawSide !== 'buy' && rawSide !== 'sell') ||
+        !level ||
+        !wouldCloseAtLossWithoutStopLoss(this.bot, rawSide, price)
+      ) {
+        retainedOpenOrders.push(order);
+        continue;
+      }
+      const side: 'buy' | 'sell' = rawSide;
+
+      try {
+        await this.grvt.cancelOrder(order.order_id, this.bot.pair);
+        this.recentlyNoLossCancelled.set(level.id, Date.now());
+        await db.updateGridLevel(level.id, { order_id: null });
+        const limit = getNoLossCloseLimit(this.bot, side);
+        log.warn(
+          `🛡️ No-loss: cancelled ${side} @ $${price.toFixed(2)}; ` +
+          `break-even ${limit?.kind === 'minimum' ? 'minimum' : 'maximum'} $${limit?.price.toFixed(2)}`
+        );
+      } catch (error) {
+        retainedOpenOrders.push(order);
+        log.error(
+          { botId: this.bot.id, orderId: order.order_id, err: (error as Error).message },
+          `No-loss: failed to cancel ${side} @ $${price.toFixed(2)}`
+        );
+      }
+    }
+    openOrders = retainedOpenOrders;
+
     // 3. Build set of GRVT prices (rounded) for coverage check
     const grvtPriceSet = new Set<number>();
     const grvtOrderMap = new Map<number, any>(); // price → {order_id, side}
@@ -2818,7 +2944,6 @@ export class GridBotInstance {
     // H.8: if virtual_enabled, only levels with state='active' are expected
     // to have orders. state='virtual' levels are explicitly skipped from
     // uncovered detection (they're expected to NOT have an order).
-    const gridLevels = await db.getGridLevels(this.bot.id);
     const filledLevels: any[] = [];
     const uncoveredLevels: { level: any, price: number, dist: number }[] = [];
     const isVirtual = !!this.bot.virtual_enabled;
@@ -2827,12 +2952,19 @@ export class GridBotInstance {
     // can match two adjacent DB levels and the loser gets re-placed → duplicate.
     // Real bug from bot 48 (SOL, step=0.25): old fixed 0.5 tolerance caused
     // perpetual duplicate→kill cycles around the entry price.
-    const gridStep = (this.bot.upper_price - this.bot.lower_price) / this.bot.num_grids;
-    const matchTolerance = Math.min(0.05, gridStep / 3);
-
     for (const level of gridLevels) {
       // H.8: skip virtual levels — they're supposed to have no order
       if (isVirtual && level.state === 'virtual') continue;
+
+      // Protected close levels intentionally have no live order. Also wait
+      // for the 90s fill-history matching window after cancellation so the
+      // cancellation cannot be misclassified as a fill.
+      if (wouldCloseAtLossWithoutStopLoss(this.bot, level.side, level.price)) continue;
+      const noLossCancelledAt = this.recentlyNoLossCancelled.get(level.id);
+      if (noLossCancelledAt) {
+        if (Date.now() - noLossCancelledAt < 90_000) continue;
+        this.recentlyNoLossCancelled.delete(level.id);
+      }
 
       const lp = Math.round(level.price * 100) / 100;
 
@@ -3369,6 +3501,9 @@ export class GridBotInstance {
           } catch (error) {
             if (error instanceof Error && error.message.includes('7201')) {
               // Aún fuera del price band, mantener como pendiente
+            } else if (error instanceof Error && error.message.includes('NO_LOSS_GUARD')) {
+              // Keep pending silently until the average entry moves enough
+              // for this closing order to be net profitable.
             } else if (error instanceof Error && error.message.includes('2090')) {
               log.info(`⚠️ Max orders reached, stopping pending replacements`);
               return; // STOP - don't try more

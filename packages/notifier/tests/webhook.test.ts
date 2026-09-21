@@ -1,5 +1,5 @@
 // D.7 — Webhook client tests (F.3).
-// Same pattern as telegram: mock undici, exercise dry-run + happy +
+// Webhook sink tests: mock undici, exercise dry-run + happy +
 // error paths, plus the optional secret header.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';

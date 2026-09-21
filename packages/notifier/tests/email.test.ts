@@ -27,6 +27,7 @@ describe('subjectForAlert', () => {
   it('maps known types', () => {
     expect(subjectForAlert('drawdown')).toContain('drawdown');
     expect(subjectForAlert('fills')).toContain('round-trips');
+    expect(subjectForAlert('status_change')).toContain('estado');
     expect(subjectForAlert('custom')).toContain('custom');
   });
 });

@@ -176,6 +176,14 @@ pre {
   animation: pulse-fast 0.8s cubic-bezier(0.4, 0, 0.6, 1) infinite;
 }
 
+dialog.toro-modal {
+  border-radius: 0;
+}
+
+dialog.toro-modal::backdrop {
+  background: rgba(0, 0, 0, 0.72);
+}
+
 *:focus-visible {
   outline: 2px solid var(--color-primary);
   outline-offset: 2px;

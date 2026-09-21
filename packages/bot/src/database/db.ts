@@ -160,6 +160,8 @@ export class GridBotDB {
   async initialize(): Promise<void> {
     try {
       await this.db.migrate();
+      const { seedFeaturedLeaders } = await import('../server/community.js');
+      await seedFeaturedLeaders(this.db);
       console.log('✅ PostgreSQL database inicializada');
     } catch (error) {
       console.error('❌ Error inicializando database:', error);
@@ -1817,8 +1819,33 @@ export class GridBotDB {
     google_sub: string | null;
     created_at: number;
     last_login_at: number | null;
+    display_name?: string | null;
+    avatar_url?: string | null;
+    avatar_pathname?: string | null;
+    avatar_updated_at?: number | null;
+    bio?: string | null;
   } | null> {
     return await this.dbGet(`SELECT * FROM users WHERE id = ?`, [id]);
+  }
+
+  async updateUserProfile(
+    userId: UserId,
+    patch: { display_name: string | null; bio: string | null },
+  ): Promise<void> {
+    await this.dbRun(
+      `UPDATE users SET display_name = ?, bio = ? WHERE id = ?`,
+      [patch.display_name, patch.bio, userId],
+    );
+  }
+
+  async updateUserAvatar(
+    userId: UserId,
+    patch: { avatar_url: string | null; avatar_pathname: string | null },
+  ): Promise<void> {
+    await this.dbRun(
+      `UPDATE users SET avatar_url = ?, avatar_pathname = ?, avatar_updated_at = ? WHERE id = ?`,
+      [patch.avatar_url, patch.avatar_pathname, Date.now(), userId],
+    );
   }
 
   async getUserByGoogleSub(sub: string): Promise<{

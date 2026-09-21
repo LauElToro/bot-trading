@@ -7,11 +7,14 @@
 
 import { useQuery } from '@tanstack/react-query';
 import { lazy, Suspense, useEffect, useState } from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
-import { Plus } from 'lucide-react';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
+import { ArrowRight, BookOpen, Plus, Trophy } from 'lucide-react';
 import { api } from '@/lib/api-client';
-import type { WizardPreset } from '@/components/create-bot-wizard';
+import type { WizardPreset } from '@/lib/api-types';
 import { formatPercent, formatPnl, formatUsd, formatUsdCompact } from '@/lib/format';
+import { communityAvatarUrl } from '@/lib/avatar';
+import { PageHeader } from '@/components/page-header';
+import { UserAvatar } from '@/components/user-avatar';
 import { StatCard } from '@/components/primitives/stat-card';
 import { Delta } from '@/components/primitives/delta';
 import { Button } from '@/components/primitives/button';
@@ -54,6 +57,15 @@ export function OverviewPage() {
 
   const [wizardOpen, setWizardOpen] = useState(false);
   const [wizardPreset, setWizardPreset] = useState<WizardPreset | undefined>();
+  const [guideDismissed, setGuideDismissed] = useState(
+    () => localStorage.getItem('toro-guide-seen') === '1',
+  );
+
+  const leadersQuery = useQuery({
+    queryKey: ['community-leaders'],
+    queryFn: () => api.getLeaders(),
+    staleTime: 30_000,
+  });
 
   // E.2: listen for keyboard shortcut `n b` dispatched from AppShell
   useEffect(() => {
@@ -119,27 +131,85 @@ export function OverviewPage() {
   const pairExposure = summary?.pairExposure ?? {};
   const runningCount = summary?.runningCount ?? bots.filter((b) => b.status === 'running').length;
 
+  const leaders = leadersQuery.data?.bots ?? [];
+
   return (
     <div className="flex flex-col gap-6">
-      {/* Page header + create CTA */}
-      <div className="flex items-center justify-between gap-4 flex-wrap">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">
-            {t('overview.title')}
-          </h1>
-          <p className="text-sm text-text-muted mt-1">
-            {t(bots.length === 1 ? 'overview.botCount' : 'overview.botCountPlural', { count: bots.length })}
-            {' · '}
-            <span className="text-success">
-              {t('overview.runningCount', { count: runningCount })}
-            </span>
-          </p>
+      <PageHeader
+        eyebrow={t('overview.eyebrow')}
+        title={t('overview.title')}
+        subtitle={t(bots.length === 1 ? 'overview.botCount' : 'overview.botCountPlural', { count: bots.length })
+          + ' · '
+          + t('overview.runningCount', { count: runningCount })}
+        action={
+          <Button onClick={() => setWizardOpen(true)}>
+            <Plus className="size-4" />
+            {t('overview.newBot')}
+          </Button>
+        }
+      />
+
+      {!guideDismissed && (
+        <div className="border border-primary/30 bg-primary-soft p-5">
+          <p className="font-mono text-[10px] tracking-[.18em] text-primary">{t('overview.guideKicker')}</p>
+          <h2 className="mt-2 text-xl font-semibold tracking-[-.03em]">{t('overview.guideTitle')}</h2>
+          <p className="mt-2 max-w-2xl text-sm leading-6 text-text-secondary">{t('overview.guideBody')}</p>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <Link
+              to="/dashboard/guia"
+              className="inline-flex min-h-10 items-center gap-2 bg-primary px-4 text-sm font-semibold text-white"
+            >
+              <BookOpen className="size-4" />
+              {t('overview.guideCta')}
+            </Link>
+            <button
+              type="button"
+              className="min-h-10 px-3 text-xs text-text-muted hover:text-text-primary"
+              onClick={() => {
+                localStorage.setItem('toro-guide-seen', '1');
+                setGuideDismissed(true);
+              }}
+            >
+              {t('overview.guideDismiss')}
+            </button>
+          </div>
         </div>
-        <Button onClick={() => setWizardOpen(true)}>
-          <Plus className="size-4" />
-          {t('overview.newBot')}
-        </Button>
-      </div>
+      )}
+
+      {leaders.length > 0 && (
+        <section className="border border-border-subtle">
+          <div className="flex items-center justify-between gap-3 border-b border-border-subtle px-4 py-3">
+            <div className="flex items-center gap-2">
+              <Trophy className="size-4 text-primary" />
+              <h2 className="text-sm font-semibold">{t('community.stripTitle')}</h2>
+            </div>
+            <Link to="/dashboard/podio" className="inline-flex items-center gap-1 text-xs font-medium text-primary">
+              {t('community.seePodium')}
+              <ArrowRight className="size-3.5" />
+            </Link>
+          </div>
+          <div className="grid gap-px bg-border-subtle sm:grid-cols-3">
+            {leaders.slice(0, 3).map((bot) => (
+              <div key={bot.id} className="bg-bg-base p-4">
+                <div className="flex items-center gap-2">
+                  <UserAvatar
+                    name={bot.author.name}
+                    src={communityAvatarUrl(bot.author.id, bot.author.hasAvatar)}
+                    size="sm"
+                  />
+                  <div className="min-w-0">
+                    <div className="truncate text-xs font-semibold">{bot.author.name}</div>
+                    <div className="truncate font-mono text-[10px] text-text-muted">{bot.pair}</div>
+                  </div>
+                </div>
+                <div className={`mt-3 font-mono text-lg ${bot.pnlPct >= 0 ? 'text-success' : 'text-danger'}`}>
+                  {formatPercent(bot.pnlPct)}
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       {/* Aggregate stat strip */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-px bg-border-subtle rounded-lg overflow-hidden">
@@ -221,7 +291,7 @@ export function OverviewPage() {
           <button
             type="button"
             onClick={() => setWizardOpen(true)}
-            className="rounded-lg border border-dashed border-border-default hover:border-primary hover:bg-primary-soft/30 transition-colors p-5 min-h-[280px] flex flex-col items-center justify-center gap-3 text-text-muted hover:text-primary"
+            className="border border-dashed border-border-default hover:border-primary hover:bg-primary-soft/30 transition-colors p-5 min-h-[280px] flex flex-col items-center justify-center gap-3 text-text-muted hover:text-primary"
           >
             <div className="size-12 rounded-full bg-bg-elevated flex items-center justify-center">
               <Plus className="size-6" />

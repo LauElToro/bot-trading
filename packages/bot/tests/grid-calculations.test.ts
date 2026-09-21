@@ -81,7 +81,12 @@ vi.mock('../src/server/logger.js', () => ({
   }),
 }));
 
-import { computeLiqPriceLocal, GridEngine } from '../src/bot/grid-engine.js';
+import {
+  computeLiqPriceLocal,
+  getNoLossCloseLimit,
+  wouldCloseAtLossWithoutStopLoss,
+  GridEngine,
+} from '../src/bot/grid-engine.js';
 import { TEST_OPERATOR_USER_ID } from '../src/auth/user-id.js';
 
 // ── 1. computeLiqPriceLocal ──────────────────────────────────────────
@@ -146,6 +151,45 @@ describe('computeLiqPriceLocal', () => {
     } as any);
     // factor = 1/3 - 0.005 ≈ 0.3283 → liq = 2000 * 1.3283 ≈ 2656.7
     expect(liq!).toBeGreaterThan(2000);
+  });
+});
+
+describe('no-loss close guard', () => {
+  const longBot = {
+    direction: 'long' as const,
+    sl_pct: null,
+    position_size: 0.778,
+    avg_entry_price: 2700,
+  };
+
+  it('blocks a long close below average entry plus fees', () => {
+    expect(wouldCloseAtLossWithoutStopLoss(longBot, 'sell', 2695.87)).toBe(true);
+    expect(getNoLossCloseLimit(longBot, 'sell')?.price).toBeCloseTo(2702.70, 2);
+  });
+
+  it('allows a long close above net break-even', () => {
+    expect(wouldCloseAtLossWithoutStopLoss(longBot, 'sell', 2703)).toBe(false);
+  });
+
+  it('mirrors the protection for a short position', () => {
+    const shortBot = {
+      direction: 'short' as const,
+      sl_pct: null,
+      position_size: -0.5,
+      avg_entry_price: 2700,
+    };
+    expect(wouldCloseAtLossWithoutStopLoss(shortBot, 'buy', 2698)).toBe(true);
+    expect(wouldCloseAtLossWithoutStopLoss(shortBot, 'buy', 2697)).toBe(false);
+  });
+
+  it('does not interfere when an explicit stop loss is configured', () => {
+    expect(wouldCloseAtLossWithoutStopLoss({ ...longBot, sl_pct: 5 }, 'sell', 2500)).toBe(false);
+  });
+
+  it('does not block opening orders when there is no position', () => {
+    expect(
+      wouldCloseAtLossWithoutStopLoss({ ...longBot, position_size: 0 }, 'sell', 2500)
+    ).toBe(false);
   });
 });
 

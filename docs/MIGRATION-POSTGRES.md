@@ -49,7 +49,7 @@ volverlos a cifrar.
 npm run migrate:postgres --workspace=@grvt-grid/bot -- --verify-only
 docker compose up -d bot
 curl -fsS http://127.0.0.1:3848/api/health
-docker compose --profile with-notifier up -d notifier
+docker compose up -d notifier
 ```
 
 Compruebe login, listado de bots, estado de grilla y WebSocket antes de

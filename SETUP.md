@@ -79,6 +79,7 @@ Guardá fuera de esta PC:
 
 Sin la master key, las credenciales GRVT cifradas en la DB no se pueden descifrar.
 
-## Telegram (después)
+## Alertas por email
 
-- Alertas: `docker compose --profile with-notifier up -d` + `TELEGRAM_*` en `.env`.
+- El notifier usa las mismas variables SMTP / Gmail que el bot.
+- Drawdown, liquidación, cambios de estado y el resumen diario llegan al email de la cuenta.

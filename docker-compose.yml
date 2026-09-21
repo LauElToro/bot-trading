@@ -1,49 +1,133 @@
 # Toro — self-host stack.
 #
 # What this stack runs:
-#   - bot:      the trading engine + dashboard backend (Express + WS) + SPA
-#   - notifier: Telegram sidecar (optional — disable if you don't want alerts)
+#   - postgres:  PostgreSQL 16 (1 instancia, red interna, sin puerto público)
+#   - bot:       trading engine + dashboard backend (Express + WS) + SPA
+#   - caddy:     HTTPS (Let's Encrypt) en TORO_DOMAIN (DuckDNS)
+#   - notifier:  alertas por email (drawdown, liquidación, estado, resumen)
 #
 # Usage:
-#   1. cp .env.example .env  &&  edit .env with your GRVT API keys
-#   2. docker compose up -d
-#   3. open http://localhost:3848/dashboard/
+#   1. .env ya inyectado a cada servicio via env_file
+#   2. docker compose up -d --build
+#   3. open https://toro-grid.duckdns.org/dashboard/
 #
 # Data persistence:
-#   - PostgreSQL is external and configured with DATABASE_URL
-#   - ./logs    → bot + notifier logs
+#   - volumen postgres-data
+#   - ./logs → bot + notifier logs
 #
-# Stopping safely: `docker compose stop bot` sends SIGTERM, which the bot
-# catches and uses to gracefully cancel its monitoring loop while leaving
-# all GRVT open orders intact. Same as systemctl stop on the VPS.
+# Stopping safely: `docker compose stop bot` envía SIGTERM y deja
+# las órdenes abiertas de GRVT intactas.
 
 services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: grvt-grid-postgres
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      POSTGRES_USER: "${POSTGRES_USER:-toro}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}"
+      POSTGRES_DB: "${POSTGRES_DB:-grvt}"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-toro} -d ${POSTGRES_DB:-grvt}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    networks:
+      - toro
+    # Sin ports: no se publica 5432 al host.
+
   bot:
     build:
       context: .
       dockerfile: packages/bot/Dockerfile
+      args:
+        VITE_BASE_PATH: /
+        VITE_API_BASE_URL: "${VITE_API_BASE_URL:-}"
+        VITE_GOOGLE_CLIENT_ID: "${GOOGLE_CLIENT_ID:-}"
     image: grvt-grid/bot:latest
     container_name: grvt-grid-bot
     restart: unless-stopped
     stop_signal: SIGTERM
     stop_grace_period: 30s
-    env_file: .env
+    env_file:
+      - .env
+      - packages/bot/.env
     environment:
       NODE_ENV: production
       DASHBOARD_PORT: "3848"
+      DASHBOARD_V2_DIST: /app/dashboard-dist
       LOG_LEVEL: "${LOG_LEVEL:-info}"
       DATABASE_URL: "${DATABASE_URL:?DATABASE_URL is required}"
       CREDENTIAL_MASTER_KEY: "${CREDENTIAL_MASTER_KEY:?CREDENTIAL_MASTER_KEY is required}"
     volumes:
       - ./logs/bot:/app/logs
     ports:
-      - "${BOT_PORT:-3848}:3848"
+      - "127.0.0.1:${BOT_PORT:-3848}:3848"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mailpit:
+        condition: service_started
     healthcheck:
       test: ["CMD", "curl", "-fs", "http://127.0.0.1:3848/api/health"]
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 20s
+      start_period: 40s
+    networks:
+      - toro
+
+  duckdns:
+    image: lscr.io/linuxserver/duckdns:latest
+    container_name: grvt-grid-duckdns
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      SUBDOMAINS: "${DUCKDNS_SUBDOMAIN:?DUCKDNS_SUBDOMAIN is required}"
+      TOKEN: "${DUCKDNS_TOKEN:?DUCKDNS_TOKEN is required}"
+      UPDATE_IP: ipv4
+      LOG_FILE: /config/duck.log
+    volumes:
+      - duckdns-config:/config
+    networks:
+      - toro
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: grvt-grid-caddy
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      TORO_DOMAIN: "${TORO_DOMAIN:?TORO_DOMAIN is required}"
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      bot:
+        condition: service_healthy
+    networks:
+      - toro
+
+  mailpit:
+    image: axllent/mailpit
+    container_name: grvt-grid-mailpit
+    restart: unless-stopped
+    environment:
+      MP_SMTP_AUTH_ACCEPT_ANY: "true"
+      MP_SMTP_AUTH_ALLOW_INSECURE: "true"
+    ports:
+      - "127.0.0.1:8025:8025"
+    networks:
+      - toro
 
   notifier:
     build:
@@ -54,16 +138,21 @@ services:
     restart: unless-stopped
     stop_signal: SIGTERM
     stop_grace_period: 10s
-    env_file: .env
+    env_file:
+      - .env
+      - packages/notifier/.env
     environment:
       NODE_ENV: production
       NOTIFIER_STATE_DIR: /var/lib/grvt-grid-notifier
       LOG_LEVEL: "${LOG_LEVEL:-info}"
       NOTIFIER_HEALTH_PORT: "3849"
+      DATABASE_URL: "${DATABASE_URL:?DATABASE_URL is required}"
     volumes:
       - notifier-state:/var/lib/grvt-grid-notifier
       - ./logs/notifier:/app/logs
     depends_on:
+      postgres:
+        condition: service_healthy
       bot:
         condition: service_started
     healthcheck:
@@ -72,7 +161,16 @@ services:
       timeout: 5s
       retries: 3
       start_period: 30s
-    profiles: ["full", "with-notifier"]
+    networks:
+      - toro
 
 volumes:
+  postgres-data:
   notifier-state:
+  caddy-data:
+  caddy-config:
+  duckdns-config:
+
+networks:
+  toro:
+    name: toro

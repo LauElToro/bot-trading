@@ -1,6 +1,6 @@
 # Toro
 
-Bot grid privado de LauElToro para futuros perpetuos de [GRVT](https://grvt.io/?ref=HCAQ5ES), con dashboard en tiempo real, alertas por Telegram y credenciales API cifradas por usuario.
+Bot grid privado de LauElToro para futuros perpetuos de [GRVT](https://grvt.io/?ref=HCAQ5ES), con dashboard en tiempo real, alertas por email y credenciales API cifradas por usuario.
 
 Para usar Toro, creá tu cuenta GRVT con el referido requerido: **[grvt.io/?ref=HCAQ5ES](https://grvt.io/?ref=HCAQ5ES)**
 
@@ -21,7 +21,7 @@ En Windows, el flujo local está en [SETUP.md](SETUP.md). Instalación en servid
 - **Grilla virtual**: rango más ancho que el tope de ~80 órdenes de GRVT; el bot mueve una ventana activa alrededor del precio.
 - **Multi-usuario**: cada cuenta usa sus propias credenciales GRVT y sus propios bots.
 - **Dashboard**: equity, stats, fills, posición, PnL. Updates por WebSocket.
-- **Telegram** (opcional): fills, drawdown, proximidad de liquidación, resumen diario.
+- **Email**: fills, drawdown, proximidad de liquidación, cambios de estado y resumen diario.
 
 ## Arquitectura
 
@@ -29,7 +29,7 @@ En Windows, el flujo local está en [SETUP.md](SETUP.md). Instalación en servid
 packages/
   bot/        Motor + API REST + WebSocket
   dashboard/  SPA (Vite + React + Tailwind)
-  notifier/   Alertas Telegram
+  notifier/   Alertas por email
 ```
 
 Datos en PostgreSQL externo mediante `DATABASE_URL`. Passwords con bcrypt;

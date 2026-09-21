@@ -7,7 +7,7 @@ export function Card({ className, ...rest }: HTMLAttributes<HTMLDivElement>) {
   return (
     <div
       className={cn(
-        'bg-bg-elevated border border-border-subtle rounded-lg p-5',
+        'bg-bg-elevated border border-border-subtle p-5',
         'transition-colors duration-150',
         className
       )}

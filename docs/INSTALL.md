@@ -15,7 +15,7 @@ Para usar Toro, registrate en GRVT con el referido requerido: [https://grvt.io/?
 | **2 GB RAM** minimum, 1 vCPU is enough | The bot is ~110 MB, dashboard is static, notifier is tiny. |
 | **External PostgreSQL 14+** with TLS | Required for bot state. Set its connection URL in `DATABASE_URL`. |
 | **A GRVT API key + secret + sub-account id** | Generate from grvt.io → Account → API Keys |
-| **(Optional) A Telegram bot token + chat id** | For notifications. Skip with empty values if you don't want them. |
+| **SMTP / Gmail** | Required for OTP login and for trading alerts (drawdown, liquidation, status). |
 
 Existing SQLite installations must complete
 [the PostgreSQL migration runbook](MIGRATION-POSTGRES.md) before starting
@@ -45,17 +45,9 @@ open http://localhost:3848/dashboard/
 
 ## Deployment profiles
 
-`docker-compose.yml` defines the notifier as an optional service:
-
-| Profile | Includes | When to use |
-|---|---|---|
-| _(default)_ | bot only | Local dev, behind a VPN, or you'll proxy from another reverse proxy |
-| `with-notifier` | bot + notifier | You want Telegram alerts |
-To start it:
-
-```bash
-docker compose --profile with-notifier up -d
-```
+`docker-compose.yml` includes the notifier in the default stack. It emails
+drawdown, liquidation proximity, status changes, and the daily summary to
+the bot owner. Configure the same SMTP / Gmail variables used for OTP.
 
 ## Stopping safely
 

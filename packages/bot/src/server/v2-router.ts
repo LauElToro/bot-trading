@@ -27,7 +27,22 @@ import {
   getGrvtClientForUser,
   getGrvtClientForBot,
 } from '../api/grvt-client-factory.js';
-import { TEST_OPERATOR_USER_ID, type UserId } from '../auth/user-id.js';
+import { TEST_OPERATOR_USER_ID, isUserId, type UserId } from '../auth/user-id.js';
+import {
+  deleteBlob,
+  fetchBlobBytes,
+  isBlobConfigured,
+  uploadAvatar,
+} from './blob-store.js';
+import {
+  getPublishedBot,
+  getPublishedBySource,
+  listLeaders,
+  parseMarkPrice,
+  recenterRange,
+  recordCopy,
+  toLeaderCard,
+} from './community.js';
 
 declare module 'express-serve-static-core' {
   interface Request {
@@ -933,6 +948,20 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
     });
   });
 
+  // Public avatar proxy so private Vercel Blob objects can render in <img>.
+  router.get('/community/avatar/:userId', asyncHandler(async (req, res) => {
+    const userId = String(req.params.userId ?? '').trim();
+    if (!isUserId(userId)) return res.status(404).end();
+    const user = await gridBotDb.getUserById(userId);
+    if (!user?.avatar_url) return res.status(404).end();
+    const blob = await fetchBlobBytes(user.avatar_url);
+    if (!blob) return res.status(404).end();
+    res.setHeader('Content-Type', blob.contentType);
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    res.send(blob.body);
+    return;
+  }));
+
   // E.9 — Password reset.
   //
   // Two endpoints, both PUBLIC (must work without a JWT):
@@ -1150,7 +1179,73 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
       hasGrvtCreds,
       createdAt: user.created_at,
       lastLoginAt: user.last_login_at,
+      displayName: user.display_name ?? null,
+      bio: user.bio ?? null,
+      hasAvatar: Boolean(user.avatar_url),
+      avatarUpdatedAt: user.avatar_updated_at ?? null,
     });
+    return;
+  }));
+
+  router.patch('/auth/profile', asyncHandler(async (req, res) => {
+    const userId = req.userId!;
+    const body = (req.body ?? {}) as { displayName?: unknown; bio?: unknown };
+    const displayName = String(body.displayName ?? '').trim().slice(0, 40);
+    const bio = String(body.bio ?? '').trim().slice(0, 160);
+    if (displayName && !/^[\p{L}\p{N} ._\-]+$/u.test(displayName)) {
+      return res.status(400).json({ error: 'display name has invalid characters' });
+    }
+    await gridBotDb.updateUserProfile(userId, {
+      display_name: displayName || null,
+      bio: bio || null,
+    });
+    const user = await gridBotDb.getUserById(userId);
+    res.json({
+      ok: true,
+      displayName: user?.display_name ?? null,
+      bio: user?.bio ?? null,
+    });
+    return;
+  }));
+
+  router.post('/auth/avatar', asyncHandler(async (req, res) => {
+    const userId = req.userId!;
+    if (!isBlobConfigured()) {
+      return res.status(503).json({ error: 'avatar storage is not configured' });
+    }
+    const body = (req.body ?? {}) as { mimeType?: unknown; data?: unknown };
+    const mimeType = String(body.mimeType ?? '').trim().toLowerCase();
+    const data = String(body.data ?? '').replace(/^data:[^;]+;base64,/, '');
+    if (!data) return res.status(400).json({ error: 'image data is required' });
+    let bytes: Buffer;
+    try {
+      bytes = Buffer.from(data, 'base64');
+    } catch {
+      return res.status(400).json({ error: 'invalid image data' });
+    }
+    const current = await gridBotDb.getUserById(userId);
+    const uploaded = await uploadAvatar(userId, mimeType, bytes);
+    await gridBotDb.updateUserAvatar(userId, {
+      avatar_url: uploaded.url,
+      avatar_pathname: uploaded.pathname,
+    });
+    if (current?.avatar_url && current.avatar_url !== uploaded.url) {
+      void deleteBlob(current.avatar_url);
+    }
+    res.json({
+      ok: true,
+      hasAvatar: true,
+      avatarUpdatedAt: Date.now(),
+    });
+    return;
+  }));
+
+  router.delete('/auth/avatar', asyncHandler(async (req, res) => {
+    const userId = req.userId!;
+    const current = await gridBotDb.getUserById(userId);
+    await gridBotDb.updateUserAvatar(userId, { avatar_url: null, avatar_pathname: null });
+    if (current?.avatar_url) void deleteBlob(current.avatar_url);
+    res.json({ ok: true, hasAvatar: false });
     return;
   }));
 
@@ -1502,7 +1597,131 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
     await requireBotOwnership(db, id, req.userId!);
     const bot = await dbGet(db, `SELECT * FROM grid_bots WHERE id = ?`, [id]);
     if (!bot) return res.status(404).json({ error: 'bot not found' });
-    res.json({ bot });
+    const published = await getPublishedBySource(db, req.userId!, id);
+    res.json({ bot, publishedId: published?.id ?? null });
+    return;
+  }));
+
+  router.get('/community/leaders', asyncHandler(async (_req, res) => {
+    const rows = await listLeaders(db, 10);
+    res.json({ bots: rows.map((row, index) => toLeaderCard(row, index + 1)) });
+    return;
+  }));
+
+  router.post('/bots/:id/publish', asyncHandler(async (req, res) => {
+    const id = parseInt(String(req.params.id ?? ''), 10);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: 'invalid bot id' });
+    await requireBotOwnership(db, id, req.userId!);
+    const bot = await dbGet<{
+      id: number;
+      pair: string;
+      direction: 'long' | 'short';
+      leverage: number;
+      lower_price: number;
+      upper_price: number;
+      num_grids: number;
+      investment_usdt: number;
+      total_pnl_usdt: number;
+      virtual_enabled: number | null;
+      active_window_size: number | null;
+      sl_pct: number | null;
+      tp_pct: number | null;
+      auto_shift_enabled: number | null;
+      auto_shift_pct: number | null;
+      compound_pct: number | null;
+      safeguard_enabled: number | null;
+      safeguard_threshold_pct: number | null;
+      safeguard_action: string | null;
+    }>(db, `SELECT * FROM grid_bots WHERE id = ?`, [id]);
+    if (!bot) return res.status(404).json({ error: 'bot not found' });
+    const body = (req.body ?? {}) as { title?: unknown };
+    const title = String(body.title ?? bot.pair).trim().slice(0, 80) || bot.pair;
+    const now = Date.now();
+    const pnlPct = bot.investment_usdt > 0 ? (bot.total_pnl_usdt / bot.investment_usdt) * 100 : 0;
+    const existing = await getPublishedBySource(db, req.userId!, id);
+    if (existing) {
+      await dbRun(db, `
+        UPDATE published_bots SET
+          title = ?, pair = ?, direction = ?, leverage = ?,
+          lower_price = ?, upper_price = ?, num_grids = ?, investment_usdt = ?,
+          virtual_enabled = ?, active_window_size = ?, sl_pct = ?, tp_pct = ?,
+          auto_shift_enabled = ?, auto_shift_pct = ?, compound_pct = ?,
+          safeguard_enabled = ?, safeguard_threshold_pct = ?, safeguard_action = ?,
+          pnl_usdt = ?, pnl_pct = ?, updated_at = ?
+        WHERE id = ?
+      `, [
+        title, bot.pair, bot.direction, bot.leverage,
+        bot.lower_price, bot.upper_price, bot.num_grids, bot.investment_usdt,
+        bot.virtual_enabled ? 1 : 0, bot.active_window_size ?? null, bot.sl_pct ?? null, bot.tp_pct ?? null,
+        bot.auto_shift_enabled ? 1 : 0, bot.auto_shift_pct ?? null, bot.compound_pct ?? null,
+        bot.safeguard_enabled ? 1 : 0, bot.safeguard_threshold_pct ?? null, bot.safeguard_action ?? null,
+        bot.total_pnl_usdt, pnlPct, now, existing.id,
+      ]);
+      res.json({ id: existing.id, updated: true });
+      return;
+    }
+    const inserted = await dbRun(db, `
+      INSERT INTO published_bots (
+        user_id, source_bot_id, title, pair, direction, leverage,
+        lower_price, upper_price, num_grids, investment_usdt,
+        virtual_enabled, active_window_size, sl_pct, tp_pct,
+        auto_shift_enabled, auto_shift_pct, compound_pct,
+        safeguard_enabled, safeguard_threshold_pct, safeguard_action,
+        pnl_usdt, pnl_pct, copies_count, published_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+      RETURNING id
+    `, [
+      req.userId!, id, title, bot.pair, bot.direction, bot.leverage,
+      bot.lower_price, bot.upper_price, bot.num_grids, bot.investment_usdt,
+      bot.virtual_enabled ? 1 : 0, bot.active_window_size ?? null, bot.sl_pct ?? null, bot.tp_pct ?? null,
+      bot.auto_shift_enabled ? 1 : 0, bot.auto_shift_pct ?? null, bot.compound_pct ?? null,
+      bot.safeguard_enabled ? 1 : 0, bot.safeguard_threshold_pct ?? null, bot.safeguard_action ?? null,
+      bot.total_pnl_usdt, pnlPct, now, now,
+    ]);
+    const created = await getPublishedBySource(db, req.userId!, id);
+    res.json({ id: created?.id ?? inserted.lastID, updated: false });
+    return;
+  }));
+
+  router.post('/community/bots/:id/copy', asyncHandler(async (req, res) => {
+    const id = parseInt(String(req.params.id ?? ''), 10);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: 'invalid published bot id' });
+    const published = await getPublishedBot(db, id);
+    if (!published) return res.status(404).json({ error: 'published bot not found' });
+    if (published.seed_key === 'featured-author-total') {
+      return res.status(400).json({ error: 'author_total_not_copyable' });
+    }
+    const copy = await recordCopy(db, id, req.userId!);
+    let markPrice: number | null = null;
+    try {
+      const ticker = await cache.getOrFetch(
+        `ticker:public:${published.pair}`,
+        5_000,
+        () => grvtClient.getTicker(published.pair),
+      );
+      markPrice = parseMarkPrice(ticker);
+    } catch {
+      markPrice = null;
+    }
+    const adapted = markPrice
+      ? recenterRange(published.lower_price, published.upper_price, markPrice)
+      : { lower: published.lower_price, upper: published.upper_price };
+    const card = toLeaderCard({
+      ...published,
+      lower_price: adapted.lower,
+      upper_price: adapted.upper,
+    }, 0);
+    res.json({
+      bot: card,
+      copiesCount: copy.copiesCount,
+      alreadyCopied: copy.alreadyCopied,
+      markPrice,
+      rangeAdapted: Boolean(markPrice),
+      originalRange: {
+        lower: published.lower_price,
+        upper: published.upper_price,
+      },
+    });
     return;
   }));
 

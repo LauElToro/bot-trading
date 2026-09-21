@@ -1,4 +1,4 @@
-# Toro notifier — sidecar Telegram worker.
+# Toro notifier — sidecar that emails trading alerts.
 # Reads PostgreSQL using a dedicated read-only connection URL.
 
 FROM node:22-bookworm-slim AS builder
@@ -13,7 +13,6 @@ RUN npm ci --workspace=@grvt-grid/notifier --include-workspace-root
 
 COPY packages/notifier/src packages/notifier/src
 RUN npm run build --workspace=@grvt-grid/notifier
-RUN npm prune --omit=dev
 
 # ── Runtime ─────────────────────────────────────────────────────────────
 FROM node:22-bookworm-slim AS runtime

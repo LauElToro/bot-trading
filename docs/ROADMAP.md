@@ -11,7 +11,7 @@
 Core grid trading engine on GRVT perpetual futures. LONG/SHORT strategies, post-only orders with retry, fill deduplication, rate-limit handling.
 
 ### Phase B — Dashboard + Multi-Tenancy ✅
-Full SPA (Vite + React + Tailwind + shadcn). GridChart with candle + grid overlays, equity curve, sparklines, 4-step create-bot wizard, live range update with preview, compound rebalancing, roundtrip tracking via FIFO fill pairing, multi-tenant auth (JWT + encrypted credentials), Docker self-host kit, Telegram notifier, light/dark theme.
+Full SPA (Vite + React + Tailwind + shadcn). GridChart with candle + grid overlays, equity curve, sparklines, 4-step create-bot wizard, live range update with preview, compound rebalancing, roundtrip tracking via FIFO fill pairing, multi-tenant auth (JWT + encrypted credentials), Docker self-host kit, email notifier, light/dark theme.
 
 ### Phase C — Hardening & Reliability ✅
 All 10/10 deployed. Structured logging (pino), per-user GRVT clients, liquidation safeguard, graceful shutdown, deep health check, pagination, processedFills pruning, one-bot-per-instrument guard, notifier health.

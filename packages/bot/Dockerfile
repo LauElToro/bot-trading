@@ -43,9 +43,11 @@ WORKDIR /build
 
 ARG VITE_BASE_PATH=/
 ARG VITE_API_BASE_URL=
+ARG VITE_GOOGLE_CLIENT_ID=
 
 ENV VITE_BASE_PATH=${VITE_BASE_PATH} \
-    VITE_API_BASE_URL=${VITE_API_BASE_URL}
+    VITE_API_BASE_URL=${VITE_API_BASE_URL} \
+    VITE_GOOGLE_CLIENT_ID=${VITE_GOOGLE_CLIENT_ID}
 
 COPY package.json package-lock.json ./
 COPY packages/dashboard/package.json packages/dashboard/
@@ -53,6 +55,8 @@ COPY packages/dashboard/package.json packages/dashboard/
 RUN npm ci --workspace=@grvt-grid/dashboard --include-workspace-root
 
 COPY packages/dashboard packages/dashboard
+# vite.config.ts extrae los TOS vigentes desde el source del bot
+COPY packages/bot/src/server/v2-router.ts packages/bot/src/server/v2-router.ts
 RUN npm run build --workspace=@grvt-grid/dashboard
 
 # ── Stage 3: runtime ──────────────────────────────────────────────────────

@@ -30,6 +30,10 @@ export interface AuthUser {
   hasGrvtCreds: boolean;
   createdAt: number;
   lastLoginAt: number | null;
+  displayName: string | null;
+  bio: string | null;
+  hasAvatar: boolean;
+  avatarUpdatedAt: number | null;
 }
 
 interface AuthCtx {
@@ -88,6 +92,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         hasGrvtCreds: data.hasGrvtCreds,
         createdAt: data.createdAt,
         lastLoginAt: data.lastLoginAt,
+        displayName: data.displayName ?? null,
+        bio: data.bio ?? null,
+        hasAvatar: data.hasAvatar === true,
+        avatarUpdatedAt: data.avatarUpdatedAt ?? null,
       });
     } catch {
       logout();
@@ -132,6 +140,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       hasGrvtCreds: res.hasGrvtCreds,
       createdAt: 0,
       lastLoginAt: null,
+      displayName: null,
+      bio: null,
+      hasAvatar: false,
+      avatarUpdatedAt: null,
     });
   }, [applyAccessToken]);
 
@@ -159,6 +171,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       hasGrvtCreds: res.hasGrvtCreds,
       createdAt: extras.acceptedTerms ? Date.now() : 0,
       lastLoginAt: null,
+      displayName: null,
+      bio: null,
+      hasAvatar: false,
+      avatarUpdatedAt: null,
     });
     await refreshMe();
   }, [applyAccessToken, refreshMe]);

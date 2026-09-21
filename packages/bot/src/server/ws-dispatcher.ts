@@ -31,6 +31,7 @@ import type { EventEmitter } from 'node:events';
 import { wsBus } from './ws-bus.js';
 import { childLogger } from './logger.js';
 import type { QueryExecutor } from '../database/postgres.js';
+import { sendSafeguardEmail } from '../mail/alerts.js';
 
 const log = childLogger('dispatcher');
 
@@ -128,13 +129,19 @@ export class WsDispatcher {
       wsBus.publishToMany([`bot:${payload.botId}`, 'bots', 'notifications'], 'botClosed', payload);
     });
 
-    this.engine.on('safeguardTriggered', (payload: { botId: number; error: string }) => {
+    this.engine.on('safeguardTriggered', (payload: {
+      botId: number;
+      error: string;
+      action?: string;
+      reason?: string;
+    }) => {
       log.warn({ ...payload }, 'safeguard triggered');
       wsBus.publishToMany(
         [`bot:${payload.botId}`, 'bots', 'notifications'],
         'safeguardTriggered',
         payload
       );
+      void this.emailSafeguard(payload);
     });
 
     // H.2: auto-shift completed. Surfaces in the dashboard's notification
@@ -154,6 +161,33 @@ export class WsDispatcher {
         payload
       );
     });
+  }
+
+  private async emailSafeguard(payload: {
+    botId: number;
+    error: string;
+    action?: string;
+    reason?: string;
+  }): Promise<void> {
+    try {
+      const row = await this.db.get<{ email: string; pair: string }>(
+        `SELECT u.email, b.pair
+         FROM grid_bots b
+         JOIN users u ON u.id = b.user_id
+         WHERE b.id = ?`,
+        [payload.botId],
+      );
+      if (!row?.email) return;
+      await sendSafeguardEmail({
+        to: row.email,
+        botId: payload.botId,
+        pair: row.pair,
+        action: payload.action ?? 'pause',
+        reason: payload.reason ?? payload.error,
+      });
+    } catch (err) {
+      log.error({ err: (err as Error).message, botId: payload.botId }, 'safeguard email lookup failed');
+    }
   }
 
   // ─── Per-bot state tick poller ────────────────────────────────────────

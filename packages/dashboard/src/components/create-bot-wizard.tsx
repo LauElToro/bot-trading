@@ -1,25 +1,31 @@
-// Create Bot Wizard — 4-step modal flow per design doc §7.3.
+// Create Bot Wizard — 4-step modal: Pair → Range → Config → Confirm
 //
-// Steps: Pair → Range → Config → Confirm
-//
-// Step 4 calls /bots/validate to compute the live preview, then on Confirm
-// calls POST /bots which creates the bot in 'paused' state. The user is
-// then navigated to the new bot's detail page where they can review the
-// grid and explicitly Start it.
-//
-// Why paused-by-default: the engine's startBot() places real orders on
-// GRVT. We don't want a misclick on "Create" to immediately spend money.
+// Step 4 calls /bots/validate, then POST /bots creates the bot paused.
+// Why paused-by-default: startBot() places real orders on GRVT.
 
-import { useState, useMemo, type ReactNode } from 'react';
-import { useMutation, useQuery } from '@tanstack/react-query';
+import { useMemo, useState, type ReactNode } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import { useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import { AlertTriangle, Check, ChevronLeft, ChevronRight } from 'lucide-react';
+import {
+  AlertTriangle,
+  ArrowDownRight,
+  ArrowUpRight,
+  Check,
+  ChevronLeft,
+  ChevronRight,
+  Layers,
+  PauseCircle,
+  Search,
+  Shield,
+  TrendingUp,
+  Wallet,
+} from 'lucide-react';
 import { Modal } from './primitives/modal';
 import { Button } from './primitives/button';
 import { Input } from './primitives/input';
 import { Mono } from './primitives/mono';
+import { FieldHelp } from './field-help';
 import { api } from '@/lib/api-client';
 import { RangePickerChart } from './charts/range-picker-chart';
 import {
@@ -28,22 +34,11 @@ import {
   formatSize,
   formatUsd,
 } from '@/lib/format';
-import type { ValidateBotInput, ValidateBotResult } from '@/lib/api-types';
+import type { ValidateBotInput, ValidateBotResult, WizardPreset } from '@/lib/api-types';
 import { cn } from '@/lib/cn';
 import { useT } from '@/i18n';
 
-// Optional preset handed in from /backtest "Apply to wizard". Only the
-// numeric grid params — safety knobs (compound, SL/TP, safeguard) still
-// default to off so the user reviews them in Step 3 (Config).
-export interface WizardPreset {
-  pair: string;
-  direction: 'long' | 'short';
-  leverage: number;
-  lower_price: number;
-  upper_price: number;
-  num_grids: number;
-  investment_usdt: number;
-}
+export type { WizardPreset } from '@/lib/api-types';
 
 interface CreateBotWizardProps {
   open: boolean;
@@ -54,7 +49,7 @@ interface CreateBotWizardProps {
 interface WizardState {
   pair: string;
   direction: 'long' | 'short';
-  lower: string; // strings while user types
+  lower: string;
   upper: string;
   grids: string;
   investment: string;
@@ -70,7 +65,6 @@ interface WizardState {
   autoShiftPct: string;
   virtualEnabled: boolean;
   activeWindowSize: string;
-  // H.5: '' = use default credentials. Otherwise = sub-account row id (as string for <select>).
   subAccountId: string;
 }
 
@@ -96,11 +90,12 @@ const INITIAL_STATE: WizardState = {
   subAccountId: '',
 };
 
-// H.1: hardcoded fallback — used while the API query is loading
 const FALLBACK_PAIRS = [
   { value: 'ETH_USDT_Perp', label: 'ETH-USDT-Perp' },
   { value: 'BTC_USDT_Perp', label: 'BTC-USDT-Perp' },
 ];
+
+const FEATURED_TICKERS = ['BTC', 'ETH', 'SOL', 'DOGE'];
 
 type Step = 0 | 1 | 2 | 3;
 const STEP_LABEL_KEYS = [
@@ -108,6 +103,12 @@ const STEP_LABEL_KEYS = [
   'wizard.stepRange',
   'wizard.stepConfig',
   'wizard.stepConfirm',
+];
+const STEP_HINT_KEYS = [
+  'wizard.stepHintPair',
+  'wizard.stepHintRange',
+  'wizard.stepHintConfig',
+  'wizard.stepHintConfirm',
 ];
 
 function applyPreset(preset?: WizardPreset): WizardState {
@@ -121,7 +122,19 @@ function applyPreset(preset?: WizardPreset): WizardState {
     grids: String(preset.num_grids),
     investment: String(preset.investment_usdt),
     leverage: String(preset.leverage),
+    virtualEnabled: preset.virtual_enabled === true,
+    activeWindowSize: String(preset.active_window_size ?? INITIAL_STATE.activeWindowSize),
+    slPct: preset.sl_pct != null ? String(preset.sl_pct) : '',
+    tpPct: preset.tp_pct != null ? String(preset.tp_pct) : '',
+    autoShiftEnabled: preset.auto_shift_enabled === true,
+    autoShiftPct: String(preset.auto_shift_pct ?? INITIAL_STATE.autoShiftPct),
+    compoundPct: String(preset.compound_pct ?? 0),
   };
+}
+
+function parsePair(value: string) {
+  const [ticker = value, quote = 'USDT', kind = 'Perp'] = value.split('_');
+  return { ticker, quote, kind };
 }
 
 export function CreateBotWizard({ open, onClose, preset }: CreateBotWizardProps) {
@@ -131,16 +144,12 @@ export function CreateBotWizard({ open, onClose, preset }: CreateBotWizardProps)
   const [validated, setValidated] = useState<ValidateBotResult | null>(null);
   const navigate = useNavigate();
 
-  // H.1: fetch available instruments from GRVT API
   const instrumentsQuery = useQuery({
     queryKey: ['instruments'],
     queryFn: () => api.getInstruments(),
     staleTime: 60_000,
     enabled: open,
   });
-  // H.5: load sub-accounts so the wizard can offer routing. The dropdown
-  // is only rendered when subs.length > 0 — single-account users see no
-  // change to the existing flow.
   const subAccountsQuery = useQuery({
     queryKey: ['sub-accounts'],
     queryFn: () => api.listSubAccounts(),
@@ -177,9 +186,6 @@ export function CreateBotWizard({ open, onClose, preset }: CreateBotWizardProps)
     },
   });
 
-  // Reset on close. Note: we reset to a *preset-less* state so the next
-  // time the user opens the wizard via the regular "New bot" CTA it
-  // starts blank. A preset only takes effect on the open it was passed in.
   function handleClose() {
     setStep(0);
     setState(INITIAL_STATE);
@@ -197,27 +203,22 @@ export function CreateBotWizard({ open, onClose, preset }: CreateBotWizardProps)
           safeguard_enabled: true,
           safeguard_threshold_pct: Math.min(
             50,
-            Math.max(1, parseFloat(state.safeguardThresholdPct || '10'))
+            Math.max(1, parseFloat(state.safeguardThresholdPct || '10')),
           ),
           safeguard_action: state.safeguardAction,
         }
       : {};
-    // H.3: SL/TP
     const slPct = parseFloat(state.slPct || '0');
     const tpPct = parseFloat(state.tpPct || '0');
-    // H.2: auto-shift
     const autoShiftPayload = state.autoShiftEnabled
       ? { auto_shift_enabled: true, auto_shift_pct: parseFloat(state.autoShiftPct || '10') }
       : {};
-    // H.8: virtual grids
     const virtualPayload = state.virtualEnabled
       ? {
           virtual_enabled: true,
           active_window_size: Math.min(80, Math.max(20, parseInt(state.activeWindowSize || '70', 10))),
         }
       : {};
-    // H.5: thread the picked sub-account through to POST /bots. Empty
-    // string in state.subAccountId = use the user's default credentials.
     const subAccountPayload = state.subAccountId
       ? { grvt_sub_account_id: parseInt(state.subAccountId, 10) }
       : {};
@@ -241,10 +242,6 @@ export function CreateBotWizard({ open, onClose, preset }: CreateBotWizardProps)
 
   function update<K extends keyof WizardState>(key: K, value: WizardState[K]) {
     setState((s) => ({ ...s, [key]: value }));
-    // Only invalidate the cached /validate result when a CONFIG field
-    // changes — ticking the risk checkbox on step 4 must NOT reset
-    // validated, otherwise StepConfirm re-renders to null (line 469)
-    // and the checkbox disappears mid-tick, breaking the wizard.
     if (
       key !== 'acceptedRisk' &&
       key !== 'compoundPct' &&
@@ -261,7 +258,6 @@ export function CreateBotWizard({ open, onClose, preset }: CreateBotWizardProps)
     }
   }
 
-  // Trigger validate when entering Step 3 (Confirm).
   function next() {
     if (step === 2) {
       const input: ValidateBotInput = {
@@ -312,16 +308,29 @@ export function CreateBotWizard({ open, onClose, preset }: CreateBotWizardProps)
     return false;
   })();
 
+  const nextHint =
+    step === 0 && !canNext
+      ? t('wizard.needPair')
+      : step === 1 && !canNext
+        ? t('wizard.needRange')
+        : step === 2 && !canNext
+          ? t('wizard.needConfig')
+          : step === 3 && !canNext
+            ? t('wizard.needRisk')
+            : step === 3
+              ? t('wizard.createHint')
+              : t(STEP_HINT_KEYS[step]);
+
   return (
     <Modal
       open={open}
       onClose={handleClose}
       size="wide"
+      kicker={t('wizard.kicker')}
       title={t('wizard.title')}
-      description={t('wizard.modalDesc', {
-        n: step + 1,
-        step: t(STEP_LABEL_KEYS[step]),
-      })}
+      description={t('wizard.modalDesc')}
+      headerExtra={<Stepper step={step} onJump={(s) => setStep(s)} />}
+      footerStart={nextHint}
       footer={
         <>
           <Button variant="ghost" onClick={handleClose}>
@@ -345,80 +354,91 @@ export function CreateBotWizard({ open, onClose, preset }: CreateBotWizardProps)
               onClick={handleCreate}
             >
               <Check className="size-4" />
-              {createMutation.isPending
-                ? t('wizard.creatingShort')
-                : t('wizard.createPaused')}
+              {createMutation.isPending ? t('wizard.creatingShort') : t('wizard.createPaused')}
             </Button>
           )}
         </>
       }
     >
-      <Stepper step={step} />
-      <div className="mt-6">
-        {step === 0 && (
-          <StepPair
-            state={state}
-            update={update}
-            pairs={PAIRS}
-            subAccounts={subAccounts}
-          />
-        )}
-        {step === 1 && <StepRange state={state} update={update} />}
-        {step === 2 && <StepConfig state={state} update={update} />}
-        {step === 3 && (
-          <StepConfirm
-            state={state}
-            update={update}
-            validated={validated}
-            isValidating={validateMutation.isPending}
-            error={validateMutation.error as Error | null}
-          />
-        )}
-      </div>
+      {preset?.copiedFrom && (
+        <div className="mb-5 border border-primary/35 bg-primary-soft px-3 py-2 text-xs text-text-secondary">
+          <p>{t('wizard.copiedFrom', { name: preset.copiedFrom.authorName })}</p>
+          {preset.copiedFrom.rangeAdapted &&
+            preset.copiedFrom.markPrice != null &&
+            preset.copiedFrom.originalLower != null &&
+            preset.copiedFrom.originalUpper != null && (
+              <p className="mt-1 text-text-muted">
+                {t('wizard.copiedRangeAdapted', {
+                  mark: formatUsd(preset.copiedFrom.markPrice),
+                  low: formatUsd(preset.copiedFrom.originalLower),
+                  high: formatUsd(preset.copiedFrom.originalUpper),
+                })}
+              </p>
+            )}
+        </div>
+      )}
+      {step === 0 && (
+        <StepPair state={state} update={update} pairs={PAIRS} subAccounts={subAccounts} />
+      )}
+      {step === 1 && <StepRange state={state} update={update} />}
+      {step === 2 && <StepConfig state={state} update={update} />}
+      {step === 3 && (
+        <StepConfirm
+          state={state}
+          update={update}
+          validated={validated}
+          isValidating={validateMutation.isPending}
+          error={validateMutation.error as Error | null}
+        />
+      )}
     </Modal>
   );
 }
 
-// ── Stepper ──────────────────────────────────────────────────────────────
-
-function Stepper({ step }: { step: Step }) {
+function Stepper({ step, onJump }: { step: Step; onJump: (s: Step) => void }) {
   const t = useT();
   return (
-    <div className="flex items-center gap-2 mb-2">
+    <ol className="relative grid grid-cols-4 border-t border-border-subtle">
       {STEP_LABEL_KEYS.map((labelKey, i) => {
         const active = i === step;
         const completed = i < step;
         return (
-          <div key={labelKey} className="flex items-center gap-2 flex-1">
-            <div
+          <li key={labelKey} className="relative">
+            <button
+              type="button"
+              disabled={!completed && !active}
+              onClick={() => completed && onJump(i as Step)}
               className={cn(
-                'size-6 rounded-full flex items-center justify-center text-2xs font-semibold',
-                completed && 'bg-success text-bg-base',
-                active && 'bg-primary text-bg-base',
-                !active && !completed && 'bg-bg-muted text-text-muted'
+                'flex w-full flex-col gap-1 px-3 py-3 text-left transition-colors md:px-5',
+                active && 'bg-primary-soft',
+                completed && 'hover:bg-bg-muted',
+                !active && !completed && 'opacity-55',
               )}
             >
-              {completed ? <Check className="size-3" /> : i + 1}
-            </div>
-            <span
-              className={cn(
-                'text-2xs uppercase tracking-wider',
-                active ? 'text-text-primary font-semibold' : 'text-text-muted'
-              )}
-            >
-              {t(labelKey)}
-            </span>
-            {i < STEP_LABEL_KEYS.length - 1 && (
-              <div className="flex-1 h-px bg-border-subtle" />
-            )}
-          </div>
+              {active && <span className="absolute inset-x-0 top-0 h-0.5 bg-primary" />}
+              <span
+                className={cn(
+                  'font-mono text-[10px] tracking-[.18em]',
+                  active || completed ? 'text-primary' : 'text-text-muted',
+                )}
+              >
+                {String(i + 1).padStart(2, '0')}
+              </span>
+              <span
+                className={cn(
+                  'text-xs font-medium',
+                  active ? 'text-text-primary' : 'text-text-secondary',
+                )}
+              >
+                {t(labelKey)}
+              </span>
+            </button>
+          </li>
         );
       })}
-    </div>
+    </ol>
   );
 }
-
-// ── Step 1: Pair selector ────────────────────────────────────────────────
 
 function StepPair({
   state,
@@ -437,113 +457,227 @@ function StepPair({
     const q = query.trim().toLowerCase();
     if (!q) return pairs;
     return pairs.filter(
-      (p) =>
-        p.label.toLowerCase().includes(q) || p.value.toLowerCase().includes(q)
+      (p) => p.label.toLowerCase().includes(q) || p.value.toLowerCase().includes(q),
     );
   }, [pairs, query]);
 
-  return (
-    <div>
-      {/* H.5: only show the picker when the user has at least one sub-account.
-          Otherwise the bot routes through default credentials and the UI is
-          identical to the pre-H.5 wizard. */}
-      {subAccounts.length > 0 && (
-        <div className="mb-5">
-          <h3 className="text-sm font-semibold text-text-primary mb-2">
-            {t('wizard.subAccountTitle')}
-          </h3>
-          <select
-            value={state.subAccountId}
-            onChange={(e) => update('subAccountId', e.target.value)}
-            className="w-full h-10 rounded-md border border-border-subtle bg-bg-surface px-3 text-sm text-text-primary"
-          >
-            <option value="">{t('wizard.subAccountDefault')}</option>
-            {subAccounts.map((s) => (
-              <option key={s.id} value={String(s.id)}>
-                {s.label}
-                {s.isDefault ? ` (${t('settings.subAccounts.default')})` : ''}
-              </option>
-            ))}
-          </select>
-          <p className="text-2xs text-text-muted mt-1">
-            {t('wizard.subAccountHelp')}
-          </p>
-        </div>
-      )}
+  const featured = useMemo(
+    () =>
+      FEATURED_TICKERS.map((ticker) =>
+        pairs.find((p) => parsePair(p.value).ticker === ticker),
+      ).filter(Boolean) as Array<{ value: string; label: string }>,
+    [pairs],
+  );
 
-      <h3 className="text-sm font-semibold text-text-primary mb-3">
-        {t('wizard.selectInstrument')}
-      </h3>
-      <Input
-        placeholder={t('wizard.searchPairs', { n: pairs.length })}
-        value={query}
-        onChange={(e) => setQuery(e.target.value)}
-        className="mb-3"
-        autoFocus
-      />
-      <div className="max-h-[400px] overflow-y-auto pr-1">
-        <div className="grid grid-cols-2 gap-3">
+  const selected = state.pair ? parsePair(state.pair) : null;
+
+  return (
+    <div className="grid gap-6 lg:grid-cols-[minmax(0,1.15fr)_minmax(280px,.85fr)]">
+      <div>
+        {subAccounts.length > 0 && (
+          <div className="mb-5">
+            <h3 className="text-sm font-semibold text-text-primary">{t('wizard.subAccountTitle')}</h3>
+            <select
+              value={state.subAccountId}
+              onChange={(e) => update('subAccountId', e.target.value)}
+              className="mt-2 h-10 w-full border border-border-subtle bg-bg-surface px-3 text-sm text-text-primary"
+            >
+              <option value="">{t('wizard.subAccountDefault')}</option>
+              {subAccounts.map((s) => (
+                <option key={s.id} value={String(s.id)}>
+                  {s.label}
+                  {s.isDefault ? ` (${t('settings.subAccounts.default')})` : ''}
+                </option>
+              ))}
+            </select>
+            <p className="mt-1 text-2xs text-text-muted">{t('wizard.subAccountHelp')}</p>
+          </div>
+        )}
+
+        <h3 className="text-sm font-semibold text-text-primary">{t('wizard.selectInstrument')}</h3>
+        <FieldHelp title={t('wizard.help.pairTitle')}>{t('wizard.help.pairBody')}</FieldHelp>
+
+        <label className="relative mt-4 block">
+          <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-text-muted" />
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder={t('wizard.searchPairs', { n: pairs.length })}
+            autoFocus
+            className="h-11 w-full border border-border-subtle bg-bg-surface pl-10 pr-3 text-sm text-text-primary placeholder:text-text-disabled focus-visible:border-primary"
+          />
+        </label>
+
+        {featured.length > 0 && !query && (
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <span className="font-mono text-[10px] tracking-[.16em] text-text-muted">
+              {t('wizard.featured')}
+            </span>
+            {featured.map((p) => {
+              const { ticker } = parsePair(p.value);
+              const on = state.pair === p.value;
+              return (
+                <button
+                  key={p.value}
+                  type="button"
+                  onClick={() => update('pair', p.value)}
+                  className={cn(
+                    'h-8 border px-3 font-mono text-xs tracking-wider transition-colors',
+                    on
+                      ? 'border-primary bg-primary-soft text-primary'
+                      : 'border-border-subtle text-text-secondary hover:border-border-default hover:text-text-primary',
+                  )}
+                >
+                  {ticker}
+                </button>
+              );
+            })}
+          </div>
+        )}
+
+        <div className="mt-3 max-h-[320px] overflow-y-auto border border-border-subtle">
           {filtered.map((p) => {
-            const selected = state.pair === p.value;
+            const { ticker, quote, kind } = parsePair(p.value);
+            const on = state.pair === p.value;
             return (
               <button
                 key={p.value}
                 type="button"
                 onClick={() => update('pair', p.value)}
                 className={cn(
-                  'p-4 rounded-md border text-left transition-colors',
-                  selected
-                    ? 'border-primary bg-primary-soft text-text-primary'
-                    : 'border-border-subtle bg-bg-surface hover:border-border-default'
+                  'flex w-full items-center justify-between gap-3 border-b border-border-subtle px-3 py-2.5 text-left last:border-b-0',
+                  on ? 'bg-primary-soft' : 'hover:bg-bg-muted',
                 )}
               >
-                <div className="font-semibold text-sm">{p.label}</div>
-                <div className="text-2xs text-text-muted mt-1">
-                  {t('wizard.pairMinMax')}
-                </div>
+                <span className="flex items-center gap-3">
+                  <span
+                    className={cn(
+                      'grid size-9 place-items-center border font-mono text-[11px] font-semibold',
+                      on
+                        ? 'border-primary bg-primary text-white'
+                        : 'border-border-subtle bg-bg-surface text-text-secondary',
+                    )}
+                  >
+                    {ticker.slice(0, 4)}
+                  </span>
+                  <span>
+                    <span className="block text-sm font-semibold text-text-primary">{ticker}</span>
+                    <span className="block font-mono text-[10px] tracking-wider text-text-muted">
+                      {quote} · {kind}
+                    </span>
+                  </span>
+                </span>
+                {on ? (
+                  <Check className="size-4 text-primary" />
+                ) : (
+                  <span className="font-mono text-[10px] text-text-disabled">50x</span>
+                )}
               </button>
             );
           })}
+          {filtered.length === 0 && (
+            <p className="px-3 py-8 text-center text-sm text-text-muted">
+              {t('wizard.noPairsMatch', { q: query })}
+            </p>
+          )}
         </div>
-        {filtered.length === 0 && (
-          <p className="text-sm text-text-muted text-center py-8">
-            {t('wizard.noPairsMatch', { q: query })}
-          </p>
-        )}
+        <p className="mt-2 text-2xs text-text-muted">
+          {t('wizard.pairsShown', { shown: filtered.length, total: pairs.length })}
+        </p>
       </div>
-      <p className="mt-4 text-2xs text-text-muted">
-        {t('wizard.pairsShown', { shown: filtered.length, total: pairs.length })}
-      </p>
 
-      <div className="mt-6">
-        <h3 className="text-sm font-semibold text-text-primary mb-3">
-          {t('wizard.directionHeading')}
-        </h3>
-        <div className="flex gap-2">
-          {(['long', 'short'] as const).map((d) => (
-            <button
-              key={d}
-              type="button"
-              onClick={() => update('direction', d)}
-              className={cn(
-                'flex-1 h-10 rounded-md border text-sm font-semibold uppercase tracking-wider',
-                state.direction === d
-                  ? d === 'long'
-                    ? 'border-success bg-success-soft text-success'
-                    : 'border-danger bg-danger-soft text-danger'
-                  : 'border-border-subtle text-text-muted hover:border-border-default'
-              )}
-            >
-              {d}
-            </button>
-          ))}
+      <aside className="flex flex-col gap-4">
+        <div>
+          <h3 className="text-sm font-semibold text-text-primary">{t('wizard.directionHeading')}</h3>
+          <FieldHelp title={t('wizard.help.directionTitle')}>{t('wizard.help.directionBody')}</FieldHelp>
+          <div className="mt-3 grid gap-2">
+            {(
+              [
+                {
+                  id: 'long' as const,
+                  icon: ArrowUpRight,
+                  title: t('wizard.longTitle'),
+                  hint: t('wizard.longHint'),
+                },
+                {
+                  id: 'short' as const,
+                  icon: ArrowDownRight,
+                  title: t('wizard.shortTitle'),
+                  hint: t('wizard.shortHint'),
+                },
+              ]
+            ).map((d) => {
+              const on = state.direction === d.id;
+              return (
+                <button
+                  key={d.id}
+                  type="button"
+                  onClick={() => update('direction', d.id)}
+                  className={cn(
+                    'flex items-start gap-3 border px-3 py-3 text-left transition-colors',
+                    on
+                      ? d.id === 'long'
+                        ? 'border-success bg-success-soft'
+                        : 'border-danger bg-danger-soft'
+                      : 'border-border-subtle hover:border-border-default',
+                  )}
+                >
+                  <span
+                    className={cn(
+                      'grid size-9 shrink-0 place-items-center border',
+                      on
+                        ? d.id === 'long'
+                          ? 'border-success text-success'
+                          : 'border-danger text-danger'
+                        : 'border-border-subtle text-text-muted',
+                    )}
+                  >
+                    <d.icon className="size-4" strokeWidth={1.75} />
+                  </span>
+                  <span>
+                    <span className="block text-sm font-semibold text-text-primary">{d.title}</span>
+                    <span className="mt-1 block text-[11px] leading-5 text-text-muted">{d.hint}</span>
+                  </span>
+                </button>
+              );
+            })}
+          </div>
         </div>
-      </div>
+
+        <div className="border border-border-default bg-bg-surface p-4">
+          <p className="font-mono text-[10px] tracking-[.18em] text-text-muted">
+            {t('wizard.selectionTitle')}
+          </p>
+          {selected ? (
+            <>
+              <p className="mt-3 text-2xl font-semibold tracking-[-.04em] text-text-primary">
+                {selected.ticker}
+              </p>
+              <p className="mt-1 font-mono text-xs text-text-secondary">
+                {selected.quote} · {selected.kind}
+              </p>
+              <div className="mt-4 flex items-center gap-2">
+                <span
+                  className={cn(
+                    'border px-2 py-1 font-mono text-[10px] tracking-wider',
+                    state.direction === 'long'
+                      ? 'border-success text-success'
+                      : 'border-danger text-danger',
+                  )}
+                >
+                  {state.direction === 'long' ? t('wizard.longTitle') : t('wizard.shortTitle')}
+                </span>
+                <span className="text-[11px] text-text-muted">{t('wizard.pairMinMax')}</span>
+              </div>
+            </>
+          ) : (
+            <p className="mt-3 text-sm leading-6 text-text-muted">{t('wizard.selectionEmpty')}</p>
+          )}
+        </div>
+      </aside>
     </div>
   );
 }
-
-// ── Step 2: Range ────────────────────────────────────────────────────────
 
 function StepRange({
   state,
@@ -557,15 +691,22 @@ function StepRange({
   const hi = parseFloat(state.upper);
   const valid = Number.isFinite(lo) && Number.isFinite(hi) && lo > 0 && hi > lo;
   const widthPct = valid ? (((hi - lo) / lo) * 100).toFixed(1) : '—';
+  const selected = parsePair(state.pair);
 
   return (
     <div>
-      <h3 className="text-sm font-semibold text-text-primary mb-3">
-        {t('wizard.setRange')}
-      </h3>
-      <p className="text-xs text-text-muted mb-4">
-        {t('wizard.rangeHelp')}
-      </p>
+      <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h3 className="text-sm font-semibold text-text-primary">{t('wizard.setRange')}</h3>
+          <p className="mt-1 max-w-xl text-xs leading-5 text-text-muted">{t('wizard.rangeHelp')}</p>
+        </div>
+        <div className="border border-border-subtle px-3 py-2 text-right">
+          <p className="font-mono text-[10px] tracking-[.16em] text-text-muted">{selected.ticker}</p>
+          <p className="font-mono text-xs text-text-primary">{state.direction.toUpperCase()}</p>
+        </div>
+      </div>
+      <FieldHelp title={t('wizard.help.rangeTitle')}>{t('wizard.help.rangeBody')}</FieldHelp>
+      <div className="mt-4" />
 
       <RangePickerChart
         pair={state.pair}
@@ -591,20 +732,23 @@ function StepRange({
           onChange={(e) => update('upper', e.target.value)}
         />
       </div>
-      {valid ? (
-        <p className="mt-4 text-xs text-text-muted">
-          {t('wizard.rangeWidth')} <Mono className="text-text-secondary">{widthPct}%</Mono>
-        </p>
-      ) : (
-        <p className="mt-4 text-xs text-danger">
-          {t('wizard.rangeInvalid')}
-        </p>
-      )}
+      <div
+        className={cn(
+          'mt-4 border px-3 py-2 text-xs',
+          valid ? 'border-border-subtle text-text-muted' : 'border-danger/40 text-danger',
+        )}
+      >
+        {valid ? (
+          <>
+            {t('wizard.rangeWidth')} <Mono className="text-text-primary">{widthPct}%</Mono>
+          </>
+        ) : (
+          t('wizard.rangeInvalid')
+        )}
+      </div>
     </div>
   );
 }
-
-// ── Step 3: Config ───────────────────────────────────────────────────────
 
 function StepConfig({
   state,
@@ -614,194 +758,196 @@ function StepConfig({
   update: <K extends keyof WizardState>(k: K, v: WizardState[K]) => void;
 }) {
   const t = useT();
-  return (
-    <div>
-      <h3 className="text-sm font-semibold text-text-primary mb-3">
-        {t('wizard.capitalAndGrid')}
-      </h3>
-      <div className="grid grid-cols-3 gap-4">
-        <Input
-          label={t('wizard.investment')}
-          numeric
-          inputMode="decimal"
-          value={state.investment}
-          onChange={(e) => update('investment', e.target.value)}
-        />
-        <Input
-          label={t('wizard.leverage')}
-          numeric
-          inputMode="numeric"
-          value={state.leverage}
-          onChange={(e) => update('leverage', e.target.value)}
-          helper="1x – 50x"
-        />
-        <Input
-          label={t('wizard.gridCount')}
-          numeric
-          inputMode="numeric"
-          value={state.grids}
-          onChange={(e) => update('grids', e.target.value)}
-          helper={state.virtualEnabled ? '2 – 500 (virtual)' : '2 – 95'}
-        />
-      </div>
+  const investment = parseFloat(state.investment || '0');
+  const leverage = parseInt(state.leverage || '0', 10);
+  const notional = investment * leverage;
 
-      {/* H.8: Virtual grids */}
-      <div className="mt-4 rounded-md border border-border-subtle bg-bg-muted/40 p-4">
-        <label className="flex items-start gap-3 cursor-pointer">
-          <input
-            type="checkbox"
-            className="mt-0.5 size-4 accent-primary"
-            checked={state.virtualEnabled}
-            onChange={(e) => update('virtualEnabled', e.target.checked)}
-          />
-          <div className="flex-1">
-            <div className="text-sm font-semibold text-text-primary">
-              {t('wizard.virtualToggle')}
-            </div>
-            <div className="text-xs text-text-muted mt-0.5">
-              {t('wizard.virtualDesc')}
-            </div>
-          </div>
-        </label>
-        {state.virtualEnabled && (
-          <div className="mt-4 grid grid-cols-2 gap-4 pl-7">
+  return (
+    <div className="space-y-4">
+      <SectionCard
+        index="01"
+        icon={Wallet}
+        title={t('wizard.configCapital')}
+        subtitle={t('wizard.help.investmentBody')}
+      >
+        <div className="grid gap-4 md:grid-cols-3">
+          <div>
             <Input
-              label={t('wizard.activeWindow')}
+              label={t('wizard.investment')}
+              numeric
+              inputMode="decimal"
+              value={state.investment}
+              onChange={(e) => update('investment', e.target.value)}
+            />
+            <FieldHelp title={t('wizard.help.investmentTitle')}>{t('wizard.help.investmentBody')}</FieldHelp>
+          </div>
+          <div>
+            <Input
+              label={t('wizard.leverage')}
               numeric
               inputMode="numeric"
-              value={state.activeWindowSize}
-              onChange={(e) => update('activeWindowSize', e.target.value)}
-              helper="20 – 80 (default 70)"
+              value={state.leverage}
+              onChange={(e) => update('leverage', e.target.value)}
+              helper="1x – 50x"
             />
+            <FieldHelp title={t('wizard.help.leverageTitle')}>{t('wizard.help.leverageBody')}</FieldHelp>
           </div>
-        )}
-      </div>
-      <div className="mt-4">
-        <Input
-          label={t('wizard.reinvestPct')}
-          numeric
-          inputMode="numeric"
-          value={state.compoundPct}
-          onChange={(e) => update('compoundPct', e.target.value)}
-          helper="0 = disabled, 100 = reinvest all profit"
-        />
-      </div>
-      <p className="mt-4 text-xs text-text-muted">
-        {t('wizard.effectiveNotional')}{' '}
-        <Mono className="text-text-secondary">
-          {formatUsd(
-            parseFloat(state.investment || '0') * parseInt(state.leverage || '0', 10)
-          )}
-        </Mono>
-        {t('wizard.effectiveNotionalEnd')}
-      </p>
-
-      <div className="mt-6 rounded-md border border-border-subtle bg-bg-muted/40 p-4">
-        <label className="flex items-start gap-3 cursor-pointer">
-          <input
-            type="checkbox"
-            className="mt-0.5 size-4 accent-primary"
-            checked={state.safeguardEnabled}
-            onChange={(e) => update('safeguardEnabled', e.target.checked)}
-          />
-          <div className="flex-1">
-            <div className="text-sm font-semibold text-text-primary">
-              {t('wizard.safeguardToggle')}
-            </div>
-            <div className="text-xs text-text-muted mt-0.5">
-              {t('wizard.safeguardDesc')}
-            </div>
-          </div>
-        </label>
-
-        {state.safeguardEnabled && (
-          <div className="mt-4 grid grid-cols-2 gap-4 pl-7">
-            <Input
-              label={t('wizard.safeguardThreshold')}
-              numeric
-              inputMode="decimal"
-              value={state.safeguardThresholdPct}
-              onChange={(e) => update('safeguardThresholdPct', e.target.value)}
-              helper="1 – 50"
-            />
-            <div>
-              <label className="block text-2xs uppercase tracking-wider text-text-muted mb-1">
-                {t('wizard.safeguardActionLabel')}
-              </label>
-              <select
-                className="w-full h-9 rounded-md border border-border-subtle bg-bg-base px-2 text-sm text-text-primary"
-                value={state.safeguardAction}
-                onChange={(e) =>
-                  update('safeguardAction', e.target.value as 'pause' | 'pause_close')
-                }
-              >
-                <option value="pause">{t('wizard.safeguardPauseOnly')}</option>
-                <option value="pause_close">{t('wizard.safeguardPauseClose')}</option>
-              </select>
-            </div>
-            <p className="col-span-2 text-2xs text-text-muted flex items-start gap-1.5">
-              <AlertTriangle className="size-3 shrink-0 mt-0.5 text-warning" />
-              <span>
-                Local estimate based on entry price and leverage. Leave a
-                buffer — the real liquidation price may differ.
-              </span>
+          <div className="border border-border-subtle bg-bg-muted/40 px-3 py-3">
+            <p className="font-mono text-[10px] tracking-[.16em] text-text-muted">
+              {t('wizard.notionalLabel')}
+            </p>
+            <p className="mt-2 font-mono text-lg text-text-primary">
+              {Number.isFinite(notional) && notional > 0 ? formatUsd(notional) : '—'}
+            </p>
+            <p className="mt-1 text-[11px] leading-5 text-text-muted">
+              {t('wizard.effectiveNotionalEnd')}
             </p>
           </div>
-        )}
-      </div>
+        </div>
+      </SectionCard>
 
-      {/* H.3: Stop-loss / Take-profit */}
-      <div className="mt-4 grid grid-cols-2 gap-4">
-        <Input
-          label={t('wizard.slLabel')}
-          numeric
-          inputMode="decimal"
-          value={state.slPct}
-          onChange={(e) => update('slPct', e.target.value)}
-        />
-        <Input
-          label={t('wizard.tpLabel')}
-          numeric
-          inputMode="decimal"
-          value={state.tpPct}
-          onChange={(e) => update('tpPct', e.target.value)}
-        />
-      </div>
-
-      <div className="mt-4 rounded-md border border-border-subtle bg-bg-muted/40 p-4">
-        <label className="flex items-start gap-3 cursor-pointer">
-          <input
-            type="checkbox"
-            className="mt-0.5 size-4 accent-primary"
-            checked={state.autoShiftEnabled}
-            onChange={(e) => update('autoShiftEnabled', e.target.checked)}
-          />
-          <div className="flex-1">
-            <div className="text-sm font-semibold text-text-primary">
-              {t('wizard.autoShiftToggle')}
-            </div>
-            <div className="text-xs text-text-muted mt-0.5">
-              {t('wizard.autoShiftDesc')}
-            </div>
-          </div>
-        </label>
-        {state.autoShiftEnabled && (
-          <div className="mt-3 pl-7">
+      <SectionCard
+        index="02"
+        icon={Layers}
+        title={t('wizard.configGrid')}
+        subtitle={t('wizard.help.gridsBody')}
+      >
+        <div className="grid gap-4 md:grid-cols-2">
+          <div>
             <Input
-              label={t('wizard.shiftThreshold')}
+              label={t('wizard.gridCount')}
+              numeric
+              inputMode="numeric"
+              value={state.grids}
+              onChange={(e) => update('grids', e.target.value)}
+              helper={state.virtualEnabled ? '2 – 500 (virtual)' : '2 – 95'}
+            />
+            <FieldHelp title={t('wizard.help.gridsTitle')}>{t('wizard.help.gridsBody')}</FieldHelp>
+          </div>
+          <div>
+            <Input
+              label={t('wizard.reinvestPct')}
+              numeric
+              inputMode="numeric"
+              value={state.compoundPct}
+              onChange={(e) => update('compoundPct', e.target.value)}
+              helper="0 = off · 100 = all profit"
+            />
+            <FieldHelp title={t('wizard.help.compoundTitle')}>{t('wizard.help.compoundBody')}</FieldHelp>
+          </div>
+        </div>
+        <ToggleCard
+          checked={state.virtualEnabled}
+          onChange={(v) => update('virtualEnabled', v)}
+          title={t('wizard.virtualToggle')}
+          description={t('wizard.virtualDesc')}
+        >
+          <FieldHelp title={t('wizard.help.virtualTitle')}>{t('wizard.help.virtualBody')}</FieldHelp>
+          {state.virtualEnabled && (
+            <div className="mt-3 max-w-xs">
+              <Input
+                label={t('wizard.activeWindow')}
+                numeric
+                inputMode="numeric"
+                value={state.activeWindowSize}
+                onChange={(e) => update('activeWindowSize', e.target.value)}
+                helper="20 – 80"
+              />
+            </div>
+          )}
+        </ToggleCard>
+      </SectionCard>
+
+      <SectionCard
+        index="03"
+        icon={Shield}
+        title={t('wizard.configRisk')}
+        subtitle={t('wizard.optional')}
+      >
+        <div className="grid gap-4 md:grid-cols-2">
+          <div>
+            <Input
+              label={t('wizard.slLabel')}
               numeric
               inputMode="decimal"
-              value={state.autoShiftPct}
-              onChange={(e) => update('autoShiftPct', e.target.value)}
+              value={state.slPct}
+              onChange={(e) => update('slPct', e.target.value)}
             />
+            <FieldHelp title={t('wizard.help.slTitle')}>{t('wizard.help.slBody')}</FieldHelp>
           </div>
-        )}
-      </div>
+          <div>
+            <Input
+              label={t('wizard.tpLabel')}
+              numeric
+              inputMode="decimal"
+              value={state.tpPct}
+              onChange={(e) => update('tpPct', e.target.value)}
+            />
+            <FieldHelp title={t('wizard.help.tpTitle')}>{t('wizard.help.tpBody')}</FieldHelp>
+          </div>
+        </div>
+
+        <ToggleCard
+          checked={state.safeguardEnabled}
+          onChange={(v) => update('safeguardEnabled', v)}
+          title={t('wizard.safeguardToggle')}
+          description={t('wizard.safeguardDesc')}
+        >
+          {state.safeguardEnabled && (
+            <div className="mt-4 grid gap-4 md:grid-cols-2">
+              <Input
+                label={t('wizard.safeguardThreshold')}
+                numeric
+                inputMode="decimal"
+                value={state.safeguardThresholdPct}
+                onChange={(e) => update('safeguardThresholdPct', e.target.value)}
+                helper="1 – 50"
+              />
+              <div>
+                <label className="mb-1.5 block text-2xs font-semibold uppercase tracking-wider text-text-muted">
+                  {t('wizard.safeguardActionLabel')}
+                </label>
+                <select
+                  className="h-10 w-full border border-border-subtle bg-bg-base px-2 text-sm text-text-primary"
+                  value={state.safeguardAction}
+                  onChange={(e) =>
+                    update('safeguardAction', e.target.value as 'pause' | 'pause_close')
+                  }
+                >
+                  <option value="pause">{t('wizard.safeguardPauseOnly')}</option>
+                  <option value="pause_close">{t('wizard.safeguardPauseClose')}</option>
+                </select>
+              </div>
+              <p className="col-span-full flex items-start gap-1.5 text-2xs text-text-muted">
+                <AlertTriangle className="mt-0.5 size-3 shrink-0 text-warning" />
+                <span>{t('wizard.safeguardLiqNote')}</span>
+              </p>
+            </div>
+          )}
+        </ToggleCard>
+
+        <ToggleCard
+          checked={state.autoShiftEnabled}
+          onChange={(v) => update('autoShiftEnabled', v)}
+          title={t('wizard.autoShiftToggle')}
+          description={t('wizard.autoShiftDesc')}
+        >
+          {state.autoShiftEnabled && (
+            <div className="mt-3 max-w-xs">
+              <Input
+                label={t('wizard.shiftThreshold')}
+                numeric
+                inputMode="decimal"
+                value={state.autoShiftPct}
+                onChange={(e) => update('autoShiftPct', e.target.value)}
+              />
+            </div>
+          )}
+        </ToggleCard>
+      </SectionCard>
     </div>
   );
 }
-
-// ── Step 4: Confirm ──────────────────────────────────────────────────────
 
 function StepConfirm({
   state,
@@ -819,20 +965,21 @@ function StepConfirm({
   const t = useT();
   if (isValidating) {
     return (
-      <div className="text-sm text-text-muted py-8 text-center animate-pulse">
-        {t('wizard.validating')}
+      <div className="py-12 text-center">
+        <p className="font-mono text-[10px] tracking-[.2em] text-primary">{t('wizard.reviewKicker')}</p>
+        <p className="mt-3 animate-pulse text-sm text-text-muted">{t('wizard.validating')}</p>
       </div>
     );
   }
 
   if (error) {
     return (
-      <div className="rounded-md border border-danger/40 bg-danger-soft/30 p-4">
+      <div className="border border-danger/40 bg-danger-soft/30 p-4">
         <div className="flex items-start gap-2 text-danger">
-          <AlertTriangle className="size-4 shrink-0 mt-0.5" />
+          <AlertTriangle className="mt-0.5 size-4 shrink-0" />
           <div>
             <div className="text-sm font-semibold">{t('wizard.validationFailed')}</div>
-            <div className="text-xs mt-1">{error.message}</div>
+            <div className="mt-1 text-xs">{error.message}</div>
           </div>
         </div>
       </div>
@@ -842,52 +989,54 @@ function StepConfirm({
   if (!validated) return null;
 
   const c = validated.computed;
+  const pair = parsePair(validated.pair);
 
   return (
     <div className="space-y-4">
-      <h3 className="text-sm font-semibold text-text-primary">
-        {t('wizard.reviewAndCreate')}
-      </h3>
+      <div>
+        <p className="font-mono text-[10px] tracking-[.2em] text-primary">{t('wizard.reviewKicker')}</p>
+        <h3 className="mt-1 text-lg font-semibold tracking-[-.03em] text-text-primary">
+          {t('wizard.reviewAndCreate')}
+        </h3>
+      </div>
 
-      <SummaryGrid>
-        <SummaryItem label={t('wizard.sumPair')} value={validated.pair} mono={false} />
-        <SummaryItem label={t('wizard.sumDirection')} value={validated.direction.toUpperCase()} mono={false} />
-        <SummaryItem label={t('wizard.sumLeverage')} value={`${validated.input.leverage}x`} />
-        <SummaryItem
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        <RecapTile label={t('wizard.sumPair')} value={`${pair.ticker} / ${pair.quote}`} />
+        <RecapTile
+          label={t('wizard.sumDirection')}
+          value={validated.direction.toUpperCase()}
+          tone={validated.direction === 'long' ? 'long' : 'short'}
+        />
+        <RecapTile label={t('wizard.sumLeverage')} value={`${validated.input.leverage}x`} />
+        <RecapTile
           label={t('wizard.sumRange')}
           value={`${formatUsd(validated.input.lower)} — ${formatUsd(validated.input.upper)}`}
         />
-        <SummaryItem label={t('wizard.sumGrids')} value={t('wizard.sumLevels', { n: validated.input.grids })} />
-        <SummaryItem label={t('wizard.sumInvestment')} value={formatUsd(validated.input.investment)} />
-      </SummaryGrid>
+        <RecapTile label={t('wizard.sumGrids')} value={t('wizard.sumLevels', { n: validated.input.grids })} />
+        <RecapTile label={t('wizard.sumInvestment')} value={formatUsd(validated.input.investment)} />
+      </div>
 
-      <hr className="border-border-subtle" />
-
-      <h4 className="text-2xs uppercase tracking-wider text-text-muted">
-        {t('wizard.computedParams')}
-      </h4>
-      <SummaryGrid>
-        <SummaryItem label={t('wizard.sumSpacing')} value={`${formatUsd(c.spacing)} (${c.spacingPct}%)`} />
-        <SummaryItem label={t('wizard.sumQtyPerLevel')} value={formatSize(c.qtyPerLevel)} />
-        <SummaryItem label={t('wizard.sumNotional')} value={formatUsd(c.notional)} />
-        <SummaryItem label={t('wizard.sumProfitPerRt')} value={formatPnl(c.profitPerRoundTrip)} />
-        <SummaryItem
-          label={t('wizard.sumEstLiq')}
-          value={formatUsd(c.liquidationEstimate)}
-        />
-        <SummaryItem
-          label={t('wizard.sumLiqDistance')}
-          value={formatPercent(-c.liqDistancePct)}
-        />
-      </SummaryGrid>
+      <div>
+        <h4 className="mb-2 font-mono text-[10px] tracking-[.18em] text-text-muted">
+          {t('wizard.computedParams')}
+        </h4>
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          <RecapTile label={t('wizard.sumSpacing')} value={`${formatUsd(c.spacing)} (${c.spacingPct}%)`} />
+          <RecapTile label={t('wizard.sumQtyPerLevel')} value={formatSize(c.qtyPerLevel)} />
+          <RecapTile label={t('wizard.sumNotional')} value={formatUsd(c.notional)} />
+          <RecapTile label={t('wizard.sumProfitPerRt')} value={formatPnl(c.profitPerRoundTrip)} />
+          <RecapTile label={t('wizard.sumEstLiq')} value={formatUsd(c.liquidationEstimate)} />
+          <RecapTile label={t('wizard.sumLiqDistance')} value={formatPercent(-c.liqDistancePct)} />
+        </div>
+      </div>
 
       {validated.warnings.length > 0 && (
-        <div className="rounded-md border border-warning/40 bg-warning-soft/30 p-3">
-          <div className="flex items-start gap-2 text-warning text-xs">
-            <AlertTriangle className="size-4 shrink-0 mt-0.5" />
+        <div className="border border-warning/40 bg-warning-soft/30 p-3">
+          <div className="flex items-start gap-2 text-xs text-warning">
+            <AlertTriangle className="mt-0.5 size-4 shrink-0" />
             <div>
               <div className="font-semibold">{t('wizard.warnings')}</div>
-              <ul className="mt-1 space-y-0.5 list-disc list-inside">
+              <ul className="mt-1 list-inside list-disc space-y-0.5">
                 {validated.warnings.map((w) => (
                   <li key={w}>{w}</li>
                 ))}
@@ -897,11 +1046,17 @@ function StepConfirm({
         </div>
       )}
 
-      <div className="rounded-md border border-border-default bg-bg-surface p-3 text-xs text-text-muted">
-        {t('wizard.pausedBanner')}
+      <div className="flex items-start gap-3 border border-border-default bg-bg-surface px-3 py-3 text-xs text-text-muted">
+        <PauseCircle className="mt-0.5 size-4 shrink-0 text-primary" />
+        <span>{t('wizard.pausedBanner')}</span>
       </div>
 
-      <label className="flex items-start gap-2 text-xs text-text-secondary cursor-pointer">
+      <label
+        className={cn(
+          'flex cursor-pointer items-start gap-3 border px-3 py-3 text-xs text-text-secondary',
+          state.acceptedRisk ? 'border-primary bg-primary-soft' : 'border-border-default',
+        )}
+      >
         <input
           type="checkbox"
           checked={state.acceptedRisk}
@@ -909,8 +1064,7 @@ function StepConfirm({
           className="mt-0.5 size-4 accent-primary"
         />
         <span>
-          {t('wizard.acceptanceText')}{' '}
-          <Mono>{formatUsd(validated.input.investment)}</Mono>
+          {t('wizard.acceptanceText')} <Mono>{formatUsd(validated.input.investment)}</Mono>
           {t('wizard.acceptanceTextEnd')}
         </span>
       </label>
@@ -918,25 +1072,87 @@ function StepConfirm({
   );
 }
 
-function SummaryGrid({ children }: { children: ReactNode }) {
-  return <dl className="grid grid-cols-2 gap-x-6 gap-y-2">{children}</dl>;
+function SectionCard({
+  index,
+  icon: Icon,
+  title,
+  subtitle,
+  children,
+}: {
+  index: string;
+  icon: typeof TrendingUp;
+  title: string;
+  subtitle: string;
+  children: ReactNode;
+}) {
+  return (
+    <section className="border border-border-subtle">
+      <header className="flex items-start gap-3 border-b border-border-subtle px-4 py-3">
+        <span className="grid size-9 shrink-0 place-items-center border border-border-subtle text-primary">
+          <Icon className="size-4" strokeWidth={1.75} />
+        </span>
+        <div>
+          <p className="font-mono text-[10px] tracking-[.18em] text-primary">{index}</p>
+          <h3 className="text-sm font-semibold text-text-primary">{title}</h3>
+          <p className="mt-0.5 text-[11px] leading-5 text-text-muted">{subtitle}</p>
+        </div>
+      </header>
+      <div className="space-y-4 px-4 py-4">{children}</div>
+    </section>
+  );
 }
 
-function SummaryItem({
+function ToggleCard({
+  checked,
+  onChange,
+  title,
+  description,
+  children,
+}: {
+  checked: boolean;
+  onChange: (v: boolean) => void;
+  title: string;
+  description: string;
+  children?: ReactNode;
+}) {
+  return (
+    <div className={cn('border px-3 py-3', checked ? 'border-primary/40 bg-primary-soft/40' : 'border-border-subtle')}>
+      <label className="flex cursor-pointer items-start gap-3">
+        <input
+          type="checkbox"
+          className="mt-0.5 size-4 accent-primary"
+          checked={checked}
+          onChange={(e) => onChange(e.target.checked)}
+        />
+        <span>
+          <span className="block text-sm font-semibold text-text-primary">{title}</span>
+          <span className="mt-0.5 block text-xs leading-5 text-text-muted">{description}</span>
+        </span>
+      </label>
+      {children}
+    </div>
+  );
+}
+
+function RecapTile({
   label,
   value,
-  mono = true,
+  tone,
 }: {
   label: string;
   value: string;
-  mono?: boolean;
+  tone?: 'long' | 'short';
 }) {
   return (
-    <div className="flex items-baseline justify-between border-b border-border-subtle pb-1.5">
-      <dt className="text-2xs uppercase tracking-wider text-text-muted">
-        {label}
-      </dt>
-      <dd className={mono ? 'font-mono text-xs text-text-primary' : 'text-xs text-text-primary'}>
+    <div className="border border-border-subtle bg-bg-surface px-3 py-3">
+      <dt className="font-mono text-[10px] tracking-[.16em] text-text-muted">{label}</dt>
+      <dd
+        className={cn(
+          'mt-1 font-mono text-sm text-text-primary',
+          tone === 'long' && 'text-success',
+          tone === 'short' && 'text-danger',
+        )}
+      >
         {value}
       </dd>
     </div>

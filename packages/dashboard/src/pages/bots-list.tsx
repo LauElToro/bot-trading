@@ -6,6 +6,7 @@ import { useQuery } from '@tanstack/react-query';
 import { lazy, Suspense, useEffect, useState } from 'react';
 import { Plus } from 'lucide-react';
 import { api } from '@/lib/api-client';
+import { PageHeader } from '@/components/page-header';
 import { Button } from '@/components/primitives/button';
 import { Card } from '@/components/primitives/card';
 import { BotCard } from '@/components/bot-card';
@@ -69,24 +70,21 @@ export function BotsListPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex items-center justify-between gap-4 flex-wrap">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">
-            {t('nav.bots')}
-          </h1>
-          <p className="text-sm text-text-muted mt-1">
-            {t(bots.length === 1 ? 'overview.botCount' : 'overview.botCountPlural', { count: bots.length })}
-            {' · '}
-            <span className="text-success">
-              {t('overview.runningCount', { count: runningCount })}
-            </span>
-          </p>
-        </div>
-        <Button onClick={() => setWizardOpen(true)}>
-          <Plus className="size-4" />
-          {t('overview.newBot')}
-        </Button>
-      </div>
+      <PageHeader
+        eyebrow={t('bots.eyebrow')}
+        title={t('nav.bots')}
+        subtitle={
+          t(bots.length === 1 ? 'overview.botCount' : 'overview.botCountPlural', { count: bots.length })
+          + ' · '
+          + t('overview.runningCount', { count: runningCount })
+        }
+        action={
+          <Button onClick={() => setWizardOpen(true)}>
+            <Plus className="size-4" />
+            {t('overview.newBot')}
+          </Button>
+        }
+      />
 
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
         {bots.map((bot) => (
@@ -95,7 +93,7 @@ export function BotsListPage() {
         <button
           type="button"
           onClick={() => setWizardOpen(true)}
-          className="rounded-lg border border-dashed border-border-default hover:border-primary hover:bg-primary-soft/30 transition-colors p-5 min-h-[280px] flex flex-col items-center justify-center gap-3 text-text-muted hover:text-primary"
+          className="border border-dashed border-border-default hover:border-primary hover:bg-primary-soft/30 transition-colors p-5 min-h-[280px] flex flex-col items-center justify-center gap-3 text-text-muted hover:text-primary"
         >
           <div className="size-12 rounded-full bg-bg-elevated flex items-center justify-center">
             <Plus className="size-6" />

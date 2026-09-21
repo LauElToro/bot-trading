@@ -1,5 +1,5 @@
 import { NavLink } from 'react-router-dom';
-import { FlaskConical, Hexagon, LayoutGrid, Settings } from 'lucide-react';
+import { Hexagon, LayoutGrid, Settings, Trophy } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import type { LucideIcon } from 'lucide-react';
 import { useT } from '@/i18n';
@@ -14,12 +14,10 @@ interface NavItem {
 const NAV: NavItem[] = [
   { to: '/dashboard', labelKey: 'nav.overview', icon: LayoutGrid, end: true },
   { to: '/dashboard/bots', labelKey: 'nav.bots', icon: Hexagon },
-  { to: '/dashboard/backtest', labelKey: 'nav.backtest', icon: FlaskConical },
+  { to: '/dashboard/podio', labelKey: 'nav.podium', icon: Trophy },
   { to: '/dashboard/settings', labelKey: 'nav.settings', icon: Settings },
 ];
 
-// Mobile bottom nav (visible <md). 4 items, ≤5 limit per design doc §7.1.
-// Touch targets are 56px tall to satisfy the 44pt minimum + safe area.
 export function BottomNav() {
   const t = useT();
   return (
@@ -28,8 +26,8 @@ export function BottomNav() {
       className={cn(
         'md:hidden flex',
         'fixed bottom-0 inset-x-0 h-14 z-40',
-        'bg-bg-surface border-t border-border-subtle',
-        'pb-[env(safe-area-inset-bottom)]'
+        'bg-bg-base/95 border-t border-border-subtle backdrop-blur-xl',
+        'pb-[env(safe-area-inset-bottom)]',
       )}
     >
       {NAV.map((item) => (
@@ -41,7 +39,7 @@ export function BottomNav() {
             cn(
               'flex-1 flex flex-col items-center justify-center gap-0.5',
               'text-2xs font-medium',
-              isActive ? 'text-primary' : 'text-text-muted'
+              isActive ? 'text-primary' : 'text-text-muted',
             )
           }
         >

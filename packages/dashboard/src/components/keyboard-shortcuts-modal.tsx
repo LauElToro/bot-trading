@@ -7,6 +7,8 @@ import { useT } from '@/i18n';
 const SHORTCUTS: Array<{ keys: string; actionKey: string }> = [
   { keys: 'g → o', actionKey: 'keyboard.goToOverview' },
   { keys: 'g → b', actionKey: 'keyboard.goToBots' },
+  { keys: 'g → p', actionKey: 'keyboard.goToPodium' },
+  { keys: 'g → h', actionKey: 'keyboard.goToGuide' },
   { keys: 'g → s', actionKey: 'keyboard.goToSettings' },
   { keys: 'n → b', actionKey: 'keyboard.createBot' },
   { keys: 't', actionKey: 'keyboard.toggleTheme' },

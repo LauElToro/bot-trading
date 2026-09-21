@@ -75,7 +75,7 @@ export function BotCard({ bot }: BotCardProps) {
     >
       <Card
         data-card
-        className="hover:border-border-default cursor-pointer p-5 transition-colors"
+        className="hover:border-primary/50 cursor-pointer p-5 transition-colors"
       >
         {/* Header */}
         <div className="flex items-start justify-between mb-3">

@@ -1,0 +1,5 @@
+# Hostname público sin IP. TORO_DOMAIN = toro-grid.duckdns.org
+{$TORO_DOMAIN} {
+	encode zstd gzip
+	reverse_proxy bot:3848
+}

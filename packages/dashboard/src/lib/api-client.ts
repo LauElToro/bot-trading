@@ -193,7 +193,7 @@ export const api = {
   getHealth: () => request<HealthV2>('/health'),
 
   getBots: () => request<{ bots: BotSummary[] }>('/bots'),
-  getBot: (id: number) => request<{ bot: BotSummary }>(`/bots/${id}`),
+  getBot: (id: number) => request<{ bot: BotSummary; publishedId?: number | null }>(`/bots/${id}`),
   getGridState: (id: number) => request<GridState>(`/bots/${id}/grid-state`),
 
   getInstruments: () => request<{ instruments: unknown[] }>('/instruments'),
@@ -440,7 +440,49 @@ export const api = {
       hasGrvtCreds: boolean;
       createdAt: number;
       lastLoginAt: number | null;
+      displayName?: string | null;
+      bio?: string | null;
+      hasAvatar?: boolean;
+      avatarUpdatedAt?: number | null;
     }>('/auth/me'),
+
+  updateProfile: (body: { displayName: string; bio: string }) =>
+    request<{ ok: true; displayName: string | null; bio: string | null }>('/auth/profile', {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    }),
+
+  uploadAvatar: (mimeType: string, data: string) =>
+    request<{ ok: true; hasAvatar: true; avatarUpdatedAt: number }>('/auth/avatar', {
+      method: 'POST',
+      body: JSON.stringify({ mimeType, data }),
+    }),
+
+  deleteAvatar: () =>
+    request<{ ok: true; hasAvatar: false }>('/auth/avatar', {
+      method: 'DELETE',
+    }),
+
+  getLeaders: () =>
+    request<{ bots: import('./api-types').CommunityBot[] }>('/community/leaders'),
+
+  publishBot: (id: number, title?: string) =>
+    request<{ id: number; updated: boolean }>(`/bots/${id}/publish`, {
+      method: 'POST',
+      body: JSON.stringify({ title }),
+    }),
+
+  copyLeaderBot: (id: number) =>
+    request<{
+      bot: import('./api-types').CommunityBot;
+      copiesCount: number;
+      alreadyCopied: boolean;
+      markPrice: number | null;
+      rangeAdapted: boolean;
+      originalRange: { lower: number; upper: number };
+    }>(`/community/bots/${id}/copy`, {
+      method: 'POST',
+    }),
 
   getAuthConfig: () =>
     request<{

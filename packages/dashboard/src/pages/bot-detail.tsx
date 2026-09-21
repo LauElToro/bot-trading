@@ -4,7 +4,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { Pause, Play, SlidersHorizontal, XCircle } from 'lucide-react';
+import { Pause, Play, Share2, SlidersHorizontal, XCircle } from 'lucide-react';
 import { toast } from 'sonner';
 import { api } from '@/lib/api-client';
 import { LiqGauge } from '@/components/charts/liq-gauge';
@@ -226,6 +226,18 @@ export function BotDetailPage() {
     onSuccess: () => toast.success(t('botDetail.closedToast', { id: botId })),
   });
 
+  const publishMutation = useMutation({
+    mutationFn: () => api.publishBot(botId),
+    onSuccess: (result) => {
+      toast.success(result.updated ? t('community.updatedToast') : t('community.publishedToast'));
+      void queryClient.invalidateQueries({ queryKey: ['bot', botId] });
+      void queryClient.invalidateQueries({ queryKey: ['community-leaders'] });
+    },
+    onError: (err: Error) => {
+      toast.error(err.message || t('community.publishFailed'));
+    },
+  });
+
   const confirm = useConfirm();
 
   // Dialog state for the "Update range" action. Declared up here so the
@@ -248,6 +260,7 @@ export function BotDetailPage() {
   }
 
   const bot = botQuery.data.bot;
+  const publishedId = botQuery.data.publishedId ?? null;
   const status = tick?.status ?? bot.status;
   const positionSize = tick?.positionSize ?? bot.position_size;
   const avgEntry = tick?.avgEntryPrice ?? bot.avg_entry_price;
@@ -414,6 +427,15 @@ export function BotDetailPage() {
           )}
         </div>
         <div className="flex items-center gap-2">
+          <Button
+            variant="secondary"
+            onClick={() => publishMutation.mutate()}
+            disabled={publishMutation.isPending}
+            title={t('community.publishHint')}
+          >
+            <Share2 className="size-4" />
+            {publishedId ? t('community.updatePodium') : t('community.publish')}
+          </Button>
           <Button
             variant="secondary"
             onClick={() => setRangeDialogOpen(true)}

@@ -15,7 +15,7 @@ What happens to your bot when the GRVT API becomes unreachable.
 - **Same as above, but longer.** The bot keeps retrying every 5s indefinitely.
 - **No automatic pause.** The bot does NOT self-pause during a GRVT outage. Your orders stay live on the exchange. This is intentional: pausing would cancel all orders, which is worse than waiting for reconnect.
 - **Compound rebalance skips.** The hourly compound check fails silently and retries next hour.
-- **Notifier degrades.** Telegram alerts may fail (separate from GRVT, but if the VPS itself is down, everything stops).
+- **Notifier degrades.** Email alerts may fail (separate from GRVT, but if the VPS itself is down, everything stops).
 
 ## What does NOT happen
 
@@ -36,5 +36,5 @@ What happens to your bot when the GRVT API becomes unreachable.
 
 1. **Don't panic during outages.** Your orders are safe on GRVT.
 2. **Check the health endpoint** (`/api/v2/health`) to see if it's a GRVT issue or a local issue.
-3. **Set up the notifier** with Telegram — it will alert you on status changes and drawdown events.
+3. **Keep SMTP configured** — the notifier emails status changes, drawdown, and liquidation proximity.
 4. **Enable automated `pg_dump` backups** and provider snapshots so a catastrophic DB loss doesn't mean total data loss.

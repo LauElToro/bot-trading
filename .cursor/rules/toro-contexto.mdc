@@ -1,0 +1,30 @@
+---
+description: Contexto operativo permanente de Toro (GRVT grid bot)
+alwaysApply: true
+---
+
+# Toro — contexto del proyecto
+
+Producto **Toro**: grid bot de futuros perpetuos en GRVT. No es open source. Sin links a GitHub en la UI.
+
+## Arquitectura
+
+- Monorepo: `packages/bot` (Express + WS + engine, puerto `3848`), `packages/dashboard` (React/Vite), `packages/notifier`.
+- DB: PostgreSQL externo (`DATABASE_URL`). Ya existe; no recrear.
+- Auth: email+password + OTP SMTP, Google Sign-In, JWT.
+- Referido fijo: `HCAQ5ES` → `https://grvt.io/?ref=HCAQ5ES`.
+- TOS vigentes: `2026-09-20-v7` en `packages/bot/src/server/v2-router.ts` (el dashboard las embebe en build).
+
+## Marca y deploy
+
+- Fondo blanco por defecto, switch `toro-ui`. Marca roja (`#dc2626` / `#ef4444`). Sin verde ni dorado de acento.
+- Vercel solo sirve el SPA. Signup da `405` sin `VITE_API_BASE_URL`.
+- Docker cluster: `packages/bot/Dockerfile`, 1 réplica, health `/api/health`, puerto `3848`.
+
+## Reglas
+
+- Responder en español.
+- No commitear secretos. No commit/PR salvo pedido explícito.
+- Verificar UI en browser si cambia comportamiento visible.
+
+Detalle completo: skill `toro-project`.

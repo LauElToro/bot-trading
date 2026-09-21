@@ -17,7 +17,6 @@ export function StatCard({ label, value, delta, className }: StatCardProps) {
     <div
       className={cn(
         'flex flex-col gap-1 bg-bg-elevated p-4',
-        'first:rounded-l-lg last:rounded-r-lg',
         className
       )}
     >

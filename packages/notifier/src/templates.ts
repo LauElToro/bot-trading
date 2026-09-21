@@ -1,5 +1,5 @@
-// Telegram message templates. Markdown-formatted, kept short and dense.
-// Numbers use `code` blocks so monospace renders correctly in mobile clients.
+// Email-oriented alert copy. Plain text so the same body works as
+// text/plain and as the HTML pre block.
 
 import type { BotRow, DailySnapshotRow, RoundtripRow } from './db.js';
 
@@ -18,20 +18,16 @@ function fmtPct(n: number): string {
   return `${sign}${n.toFixed(2)}%`;
 }
 
-/**
- * Batched fill notification — one message for N round-trips.
- * Triggered when there are NOTIFY_FILL_BATCH new round-trips since last poll.
- */
 export function fillsTemplate(roundtrips: RoundtripRow[]): string {
   if (roundtrips.length === 0) return '';
   const total = roundtrips.reduce((sum, r) => sum + r.profit, 0);
   const lines = roundtrips.slice(0, 10).map((r) => {
-    const arrow = r.profit >= 0 ? '✅' : '❌';
-    return `${arrow} \`${fmtUsd(r.buy_price)}\` → \`${fmtUsd(r.sell_price)}\`  ${fmtPnl(r.profit)}`;
+    const mark = r.profit >= 0 ? '+' : '-';
+    return `${mark} ${fmtUsd(r.buy_price)} → ${fmtUsd(r.sell_price)}  ${fmtPnl(r.profit)}`;
   });
-  const more = roundtrips.length > 10 ? `\n…+${roundtrips.length - 10} more` : '';
+  const more = roundtrips.length > 10 ? `\n…+${roundtrips.length - 10} más` : '';
   return [
-    `*${roundtrips.length} new round-trip${roundtrips.length === 1 ? '' : 's'}*  total ${fmtPnl(total)}`,
+    `${roundtrips.length} round-trip${roundtrips.length === 1 ? '' : 's'} nuevos. Total ${fmtPnl(total)}`,
     '',
     ...lines,
     more,
@@ -40,99 +36,77 @@ export function fillsTemplate(roundtrips: RoundtripRow[]): string {
     .join('\n');
 }
 
-/**
- * Drawdown alert — equity dropped from HWM by more than the configured %.
- */
 export function drawdownTemplate(
   currentEquity: number,
   hwm: number,
-  thresholdPct: number
+  thresholdPct: number,
 ): string {
   const drop = currentEquity - hwm;
   const dropPct = (drop / hwm) * 100;
   return [
-    `🚨 *Drawdown alert*`,
+    'Alerta de drawdown',
     '',
-    `Equity:  \`${fmtUsd(currentEquity)}\``,
-    `HWM:     \`${fmtUsd(hwm)}\``,
-    `Drop:    ${fmtPnl(drop)} (${fmtPct(dropPct)})`,
+    `Equity:     ${fmtUsd(currentEquity)}`,
+    `Máximo:     ${fmtUsd(hwm)}`,
+    `Caída:      ${fmtPnl(drop)} (${fmtPct(dropPct)})`,
     '',
-    `Threshold: ${thresholdPct}%. Check the dashboard.`,
+    `Umbral: ${thresholdPct}%. Revisá el dashboard antes de seguir operando.`,
   ].join('\n');
 }
 
-/**
- * Bot status transition (running ↔ paused/stopped/error).
- */
 export function statusChangeTemplate(
   bot: BotRow,
   fromStatus: string,
-  toStatus: string
+  toStatus: string,
 ): string {
-  const emoji =
-    toStatus === 'running'
-      ? '▶️'
-      : toStatus === 'paused'
-        ? '⏸'
-        : toStatus === 'error'
-          ? '🔴'
-          : '⏹';
   return [
-    `${emoji} *Bot ${bot.id}* (${bot.pair}) is now *${toStatus.toUpperCase()}*`,
-    `Was: \`${fromStatus}\``,
-    bot.last_error ? `\nError: \`${bot.last_error}\`` : '',
+    `Bot ${bot.id} (${bot.pair}) pasó a ${toStatus.toUpperCase()}`,
+    `Estado anterior: ${fromStatus}`,
+    bot.last_error ? `\nError: ${bot.last_error}` : '',
   ]
     .filter(Boolean)
     .join('\n');
 }
 
-/**
- * Daily summary — sent at DAILY_SUMMARY_HOUR_UTC.
- */
-/**
- * F.2: Liquidation proximity alert — mark price is dangerously close
- * to the estimated liquidation price.
- */
 export function liqProximityTemplate(
   bot: BotRow,
   markPrice: number,
   liqPrice: number,
-  distancePct: number
+  distancePct: number,
 ): string {
-  const emoji = distancePct < 5 ? '🚨🚨' : '⚠️';
   return [
-    `${emoji} *Liquidation proximity — Bot ${bot.id}* (${bot.pair})`,
+    `Proximidad de liquidación — Bot ${bot.id} (${bot.pair})`,
     '',
-    `Mark:   \`${fmtUsd(markPrice)}\``,
-    `Liq:    \`${fmtUsd(liqPrice)}\``,
-    `Distance: \`${distancePct.toFixed(1)}%\``,
+    `Mark:       ${fmtUsd(markPrice)}`,
+    `Liquidación:${fmtUsd(liqPrice)}`,
+    `Distancia:  ${distancePct.toFixed(1)}%`,
     '',
     distancePct < 5
-      ? '‼️ *CRITICAL* — consider pausing or closing this bot immediately.'
-      : 'Monitor closely. The bot will auto-pause if safeguard is enabled.',
+      ? 'CRÍTICO — considerá pausar o cerrar este bot ahora.'
+      : 'Monitoreá de cerca. Si el safeguard está activo, el bot puede pausarse solo.',
   ].join('\n');
 }
 
 export function dailySummaryTemplate(
   bot: BotRow,
   snapshot: DailySnapshotRow | undefined,
-  yesterdayEquity: number | null
+  yesterdayEquity: number | null,
 ): string {
   const equity = bot.investment_usdt + bot.total_pnl_usdt;
   const pct = (bot.total_pnl_usdt / bot.investment_usdt) * 100;
   const dayDelta =
     yesterdayEquity != null
-      ? `\nDay:        ${fmtPnl(equity - yesterdayEquity)} (${fmtPct(((equity - yesterdayEquity) / yesterdayEquity) * 100)})`
+      ? `\nDía:         ${fmtPnl(equity - yesterdayEquity)} (${fmtPct(((equity - yesterdayEquity) / yesterdayEquity) * 100)})`
       : '';
   const rtCount = snapshot?.round_trips ?? '—';
   return [
-    `📊 *Daily summary — Bot ${bot.id} ${bot.pair}*`,
+    `Resumen diario — Bot ${bot.id} ${bot.pair}`,
     '',
-    `Equity:     \`${fmtUsd(equity)}\``,
-    `Total PnL:  ${fmtPnl(bot.total_pnl_usdt)} (${fmtPct(pct)})${dayDelta}`,
-    `Realized:   ${fmtPnl(bot.grid_profit_usdt)}`,
-    `Unrealized: ${fmtPnl(bot.trend_pnl_usdt)}`,
-    `Round-trips today: ${rtCount}`,
-    `Status: \`${bot.status}\``,
+    `Equity:      ${fmtUsd(equity)}`,
+    `PnL total:   ${fmtPnl(bot.total_pnl_usdt)} (${fmtPct(pct)})${dayDelta}`,
+    `Realizado:   ${fmtPnl(bot.grid_profit_usdt)}`,
+    `No realizado:${fmtPnl(bot.trend_pnl_usdt)}`,
+    `Round-trips: ${rtCount}`,
+    `Estado:      ${bot.status}`,
   ].join('\n');
 }

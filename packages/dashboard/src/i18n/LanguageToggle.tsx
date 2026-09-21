@@ -36,7 +36,7 @@ export function LanguageToggle({ variant = 'default', className }: Props) {
       role="group"
       aria-label="Language"
       className={twMerge(
-        'inline-flex rounded-md border border-border-subtle overflow-hidden',
+        'inline-flex border border-border-subtle overflow-hidden',
         className
       )}
     >

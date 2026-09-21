@@ -1,9 +1,8 @@
 // Toro notifier — main worker loop.
 //
-// Runs as a standalone systemd service alongside the bot. Reads the bot's
-// PostgreSQL database, detects new events, and pushes notifications
-// to Telegram. Cursor state lives in a JSON file in NOTIFIER_STATE_DIR
-// so we don't re-send across restarts.
+// Reads the bot's PostgreSQL database, detects new events, and emails
+// important alerts to the bot owner. Cursor state lives in a JSON file
+// in NOTIFIER_STATE_DIR so we don't re-send across restarts.
 //
 // Event sources (all polled every NOTIFIER_POLL_MS):
 //   - paired_roundtrips      → batched fill notifications
@@ -14,12 +13,10 @@
 // Failure mode: any per-poll error is logged and swallowed; the loop keeps
 // going. The bot is the source of truth — the notifier is a side-car.
 
-import dotenv from 'dotenv';
 import { createServer, type Server } from 'node:http';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { NotifierDb, type BotRow } from './db.js';
-import { TelegramClient } from './telegram.js';
 import { StateStore } from './state.js';
 import { childLogger } from './logger.js';
 import {
@@ -32,8 +29,6 @@ import {
 import { WebhookClient } from './webhook.js';
 import { EmailClient, subjectForAlert } from './email.js';
 
-dotenv.config();
-
 const log = childLogger('main');
 
 export interface NotifierConfig {
@@ -44,18 +39,10 @@ export interface NotifierConfig {
   liqProximityPct: number;       // F.2: global default for liq proximity alerts
   dailySummaryHour: number;
   stateDir: string;
-  telegramToken: string | undefined;
-  telegramChatId: string | undefined;
-  webhookUrl: string | undefined; // F.3
+  webhookUrl: string | undefined;
   webhookSecret: string | undefined;
-  mutedHoursStart: number;       // F.4: -1 = disabled
+  mutedHoursStart: number;
   mutedHoursEnd: number;
-  // Single-tenant Telegram routing: only alerts owned by this user_id
-  // are sent to TELEGRAM_CHAT_ID. Every other user's alerts still hit
-  // the webhook (for the dashboard /api/v2/alerts feed). Per-user
-  // Telegram chat IDs are future work.
-  // Default 1 = the operator (matching v2-router's COALESCE policy).
-  operatorUserId: string;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): NotifierConfig {
@@ -71,13 +58,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): NotifierConfig
     liqProximityPct: parseFloat(env.NOTIFY_LIQ_PROXIMITY_PCT ?? '15'),
     dailySummaryHour: parseInt(env.DAILY_SUMMARY_HOUR_UTC ?? '0', 10),
     stateDir: env.NOTIFIER_STATE_DIR ?? '/var/lib/grvt-grid-notifier',
-    telegramToken: env.TELEGRAM_BOT_TOKEN,
-    telegramChatId: env.TELEGRAM_CHAT_ID,
     webhookUrl: env.WEBHOOK_URL,
     webhookSecret: env.WEBHOOK_SECRET,
     mutedHoursStart: parseInt(env.MUTED_HOURS_START_UTC ?? '-1', 10),
     mutedHoursEnd: parseInt(env.MUTED_HOURS_END_UTC ?? '-1', 10),
-    operatorUserId: (env.OPERATOR_USER_ID ?? '').trim(),
   };
 }
 
@@ -137,7 +121,6 @@ export function getHealthReport(
 export class Notifier {
   private readonly cfg: NotifierConfig;
   private readonly db: NotifierDb;
-  private readonly telegram: TelegramClient;
   private readonly state: StateStore;
   private timer: NodeJS.Timeout | null = null;
   private stopping = false;
@@ -155,7 +138,6 @@ export class Notifier {
   constructor(cfg: NotifierConfig) {
     this.cfg = cfg;
     this.db = new NotifierDb(cfg.databaseUrl);
-    this.telegram = new TelegramClient(cfg.telegramToken, cfg.telegramChatId);
     this.webhook = new WebhookClient(cfg.webhookUrl, cfg.webhookSecret);
     this.email = new EmailClient();
     this.state = new StateStore(cfg.stateDir);
@@ -176,21 +158,8 @@ export class Notifier {
   }
 
   /**
-   * F.3: Send to all configured sinks (Telegram + webhook).
-   * The webhook always gets the structured event; Telegram gets the
-   * formatted text.
-   *
-   * SECURITY: every alert is tagged with `userId` so /api/v2/alerts on
-   * the bot can filter per JWT-authed user. Callers MUST pass the
-   * owning user — there is no "system-wide" alert that gets shown to
-   * everyone (that would leak one user's drawdown to another).
-   *
-   * Telegram routing: single-tenant. Only `cfg.operatorUserId` events
-   * reach TELEGRAM_CHAT_ID. Every other user's alerts still hit the
-   * webhook and the alert history file, so the dashboard's
-   * /api/v2/alerts feed remains complete per-user. Before this filter
-   * the operator's chat received every tenant's activity — see
-   * 2026-05-28 incident report in SECURITY.md.
+   * Persist the alert, optionally POST the webhook, and email the owner.
+   * Every event is tagged with userId so /api/v2/alerts stays per-user.
    */
   private async notify(
     text: string,
@@ -202,7 +171,6 @@ export class Notifier {
       data?: Record<string, unknown>;
     }
   ): Promise<void> {
-    // F.6: log alert to history file before sending
     this.state.appendAlert({
       ts: Date.now(),
       type: event.type,
@@ -213,19 +181,16 @@ export class Notifier {
       data: event.data,
     });
 
-    const tasks: Promise<unknown>[] = [
+    await Promise.allSettled([
       this.webhook.send({ ...event, message: text }),
-    ];
-    if (this.cfg.operatorUserId && event.userId === this.cfg.operatorUserId) {
-      tasks.push(this.telegram.send(text));
-    }
-    tasks.push(
       this.db.getUserEmail(event.userId).then((to) => {
-        if (!to) return;
-        return this.email.send(to, subjectForAlert(event.type), text);
-      })
-    );
-    await Promise.allSettled(tasks);
+        if (!to) {
+          log.warn({ userId: event.userId, type: event.type }, 'no email for alert owner');
+          return;
+        }
+        return this.email.send(to, subjectForAlert(event.type), text, event.type);
+      }),
+    ]);
   }
 
   private ownerOf(bot: BotRow): string | null {
@@ -297,10 +262,6 @@ export class Notifier {
     });
     void this.refreshDbHealth();
 
-    log.info('sending hello message to telegram');
-    await this.telegram.send('🟢 *Toro notifier online*');
-    log.info('hello sent — scheduling first tick');
-
     this.scheduleNext();
     log.info({ pollMs: this.cfg.pollMs }, 'first tick scheduled — entering loop');
   }
@@ -317,8 +278,7 @@ export class Notifier {
     // If we unref, Node decides "nothing left to do" and exits cleanly
     // ~1s after main() returns, before the first tick ever fires.
     // (Bug discovered in production deploy 2026-04-07: process exited 0
-    //  immediately after `bootstrap state` log, no Telegram message ever
-    //  sent. systemd kept restart-looping it.)
+    //  immediately after `bootstrap state` log. systemd kept restart-looping it.)
   }
 
   private refreshDbHealth(): Promise<void> {
@@ -367,7 +327,7 @@ export class Notifier {
   // ── Roundtrip / fill detection ─────────────────────────────────────
   // SECURITY: batches and cursors are per-user. The previous global
   // cursor + global batch leaked another user's fill counts into the
-  // operator's Telegram and held cursor advancement hostage to whoever
+  // operator's inbox and held cursor advancement hostage to whoever
   // had the fewest fills.
   private async checkRoundtrips(_bots: BotRow[]): Promise<void> {
     const cursors = { ...this.state.get().lastRoundtripIdByUser };
@@ -444,7 +404,7 @@ export class Notifier {
   // ── Drawdown (per-user) ─────────────────────────────────────────────
   // SECURITY: drawdown is computed PER USER. The previous global HWM
   // mixed every user's equity together, so a $1M drop on user B would
-  // alert user A with B's number visible in the Telegram batch via the
+  // alert user A with B's number visible in the email batch via the
   // shared notifier and via the shared alert-history.json file.
   private async checkDrawdown(bots: BotRow[]): Promise<void> {
     if (bots.length === 0) return;
@@ -594,7 +554,6 @@ export class Notifier {
       });
     }
     await this.dbPingInFlight;
-    await this.telegram.send('⚪ *Toro notifier offline*');
     await this.db.close();
     log.info('notifier stopped');
   }
