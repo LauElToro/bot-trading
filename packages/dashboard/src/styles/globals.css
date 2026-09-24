@@ -22,9 +22,9 @@
   --color-text-disabled: #94a3b8;
 
   /* Semantic */
-  --color-success: #2563eb;
-  --color-success-strong: #1d4ed8;
-  --color-success-soft: #eff6ff;
+  --color-success: #16a34a;
+  --color-success-strong: #15803d;
+  --color-success-soft: #f0fdf4;
   --color-danger: #e85d4c;
   --color-danger-strong: #c94a3b;
   --color-danger-soft: #2c100c;
@@ -37,6 +37,11 @@
   --color-primary: #dc2626;
   --color-primary-strong: #b91c1c;
   --color-primary-soft: #fef2f2;
+
+  /* Credential fields only: green reads as “listo”, red reads as a failure. */
+  --color-ok: #16a34a;
+  --color-ok-strong: #15803d;
+  --color-ok-soft: #f0fdf4;
 
   /* Chart series */
   --color-chart-1: #dc2626;
@@ -87,9 +92,9 @@ html[data-theme='dark'] {
   --color-text-muted: #a1a1aa;
   --color-text-disabled: #71717a;
 
-  --color-success: #60a5fa;
-  --color-success-strong: #3b82f6;
-  --color-success-soft: #172554;
+  --color-success: #4ade80;
+  --color-success-strong: #22c55e;
+  --color-success-soft: #052e16;
   --color-danger: #f87171;
   --color-danger-strong: #ef4444;
   --color-danger-soft: #450a0a;
@@ -101,6 +106,10 @@ html[data-theme='dark'] {
   --color-primary: #ef4444;
   --color-primary-strong: #dc2626;
   --color-primary-soft: #450a0a;
+
+  --color-ok: #4ade80;
+  --color-ok-strong: #22c55e;
+  --color-ok-soft: #052e16;
 
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.45);
@@ -188,6 +197,14 @@ dialog.toro-modal::backdrop {
   outline: 2px solid var(--color-primary);
   outline-offset: 2px;
   border-radius: 2px;
+}
+
+/* Credential inputs: green focus, so the brand ring is not read as a failure. */
+input.input-positive:focus,
+input.input-positive:focus-visible {
+  outline: 2px solid var(--color-ok);
+  outline-offset: 2px;
+  border-color: var(--color-ok);
 }
 
 * {

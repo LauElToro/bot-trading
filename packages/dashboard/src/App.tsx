@@ -12,6 +12,7 @@ import { OverviewPage } from './pages/overview';
 import { BotsListPage } from './pages/bots-list';
 import { SettingsPage } from './pages/settings';
 import { PodiumPage } from './pages/podium';
+import { ProfilePage } from './pages/profile';
 import { GuidePage } from './pages/guide';
 import { LoginPage } from './pages/login';
 import { SignupPage } from './pages/signup';
@@ -188,6 +189,22 @@ export default function App() {
                 element={
                   <ErrorBoundary>
                     <PodiumPage />
+                  </ErrorBoundary>
+                }
+              />
+              <Route
+                path="perfil"
+                element={
+                  <ErrorBoundary>
+                    <ProfilePage />
+                  </ErrorBoundary>
+                }
+              />
+              <Route
+                path="perfil/:userId"
+                element={
+                  <ErrorBoundary>
+                    <ProfilePage />
                   </ErrorBoundary>
                 }
               />

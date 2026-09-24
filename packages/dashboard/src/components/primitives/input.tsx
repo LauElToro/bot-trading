@@ -9,10 +9,12 @@ interface InputProps extends InputHTMLAttributes<HTMLInputElement> {
   error?: string;
   // Whether the value is numeric — switches to mono right-aligned by default.
   numeric?: boolean;
+  // Green focus/border. Credential forms use this so brand red is not read as an error.
+  positive?: boolean;
 }
 
 export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
-  { label, helper, error, numeric, className, id, ...rest },
+  { label, helper, error, numeric, positive, className, id, ...rest },
   ref
 ) {
   const inputId = id ?? rest.name ?? `input-${Math.random().toString(36).slice(2, 8)}`;
@@ -36,9 +38,12 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
           'text-text-primary placeholder:text-text-disabled',
           'transition-colors',
           numeric && 'font-mono tabular-nums text-right',
+          positive && 'input-positive',
           error
             ? 'border-danger focus-visible:border-danger'
-            : 'border-border-subtle focus-visible:border-primary',
+            : positive
+              ? 'border-border-subtle focus:border-ok focus-visible:border-ok'
+              : 'border-border-subtle focus-visible:border-primary',
           className
         )}
         aria-invalid={!!error || undefined}

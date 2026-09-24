@@ -22,12 +22,21 @@ import { childLogger } from './logger.js';
 import {
   dailySummaryTemplate,
   drawdownTemplate,
-  fillsTemplate,
   liqProximityTemplate,
+  profitMilestoneTemplate,
   statusChangeTemplate,
 } from './templates.js';
 import { WebhookClient } from './webhook.js';
-import { EmailClient, subjectForAlert } from './email.js';
+import { EmailClient } from './email.js';
+import type { OutboundEmail } from './email-layout.js';
+import {
+  allowsEmail,
+  isImportantStatus,
+  latchAction,
+  milestoneBucket,
+  profitPct,
+  shouldNotifyMilestone,
+} from './policy.js';
 
 const log = childLogger('main');
 
@@ -162,7 +171,7 @@ export class Notifier {
    * Every event is tagged with userId so /api/v2/alerts stays per-user.
    */
   private async notify(
-    text: string,
+    mail: OutboundEmail,
     event: {
       type: string;
       userId: string;
@@ -177,19 +186,25 @@ export class Notifier {
       userId: event.userId,
       botId: event.botId,
       pair: event.pair,
-      message: text,
+      message: mail.text,
       data: event.data,
     });
 
+    const prefs = await this.db.getUserNotifyPrefs(event.userId);
     await Promise.allSettled([
-      this.webhook.send({ ...event, message: text }),
-      this.db.getUserEmail(event.userId).then((to) => {
+      this.webhook.send({ ...event, message: mail.text }),
+      (async () => {
+        if (!allowsEmail(prefs, event.type)) {
+          log.info({ userId: event.userId, type: event.type }, 'email suppressed by user prefs');
+          return;
+        }
+        const to = await this.db.getUserEmail(event.userId);
         if (!to) {
           log.warn({ userId: event.userId, type: event.type }, 'no email for alert owner');
           return;
         }
-        return this.email.send(to, subjectForAlert(event.type), text, event.type);
-      }),
+        return this.email.send(to, mail);
+      })(),
     ]);
   }
 
@@ -316,7 +331,7 @@ export class Notifier {
 
       // Non-critical — suppressed during muted hours (F.4)
       if (!muted) {
-        await this.checkRoundtrips(bots);
+        await this.checkProfitMilestones(bots);
         await this.checkDailySummary(bots);
       }
     } finally {
@@ -324,51 +339,56 @@ export class Notifier {
     }
   }
 
-  // ── Roundtrip / fill detection ─────────────────────────────────────
-  // SECURITY: batches and cursors are per-user. The previous global
-  // cursor + global batch leaked another user's fill counts into the
-  // operator's inbox and held cursor advancement hostage to whoever
-  // had the fewest fills.
-  private async checkRoundtrips(_bots: BotRow[]): Promise<void> {
-    const cursors = { ...this.state.get().lastRoundtripIdByUser };
-    // Read from min cursor across users so a slow-tracking user doesn't
-    // get permanently skipped. Per-row user attribution gates the rest.
-    const minCursor = Object.keys(cursors).length === 0
-      ? 0
-      : Math.min(...Object.values(cursors));
-    const candidates = await this.db.getRoundtripsSince(minCursor, 500);
-    if (candidates.length === 0) return;
+  // ── Profit milestones ──────────────────────────────────────────────
+  // Email only when a bot's total PnL crosses ±N% of its investment
+  // (default 5). Five $0.14 round-trips are not an email.
+  private async checkProfitMilestones(bots: BotRow[]): Promise<void> {
+    const last = { ...this.state.get().lastProfitMilestoneByBot };
+    let changed = false;
+    const prefsCache = new Map<string, Awaited<ReturnType<NotifierDb['getUserNotifyPrefs']>>>();
 
-    // Group by owning user, dropping anything already past that user's cursor.
-    const byUser = new Map<string, typeof candidates>();
-    for (const rt of candidates) {
-      if (!rt.user_id) continue;
-      const uid = String(rt.user_id);
-      const userCursor = cursors[uid] ?? 0;
-      if (rt.id <= userCursor) continue;
-      const arr = byUser.get(uid) ?? [];
-      arr.push(rt);
-      byUser.set(uid, arr);
-    }
+    for (const bot of bots) {
+      const owner = this.ownerOf(bot);
+      if (!owner) continue;
+      if (!prefsCache.has(owner)) {
+        prefsCache.set(owner, await this.db.getUserNotifyPrefs(owner));
+      }
+      const prefs = prefsCache.get(owner)!;
+      const step = prefs.profitMilestonePct;
+      const pct = profitPct(bot.total_pnl_usdt, bot.investment_usdt);
+      const bucket = milestoneBucket(pct, step);
+      const key = String(bot.id);
 
-    const threshold = this.cfg.fillBatch;
-    let mutated = false;
-    for (const [uid, rts] of byUser) {
-      if (rts.length < threshold) {
-        log.debug({ uid, count: rts.length }, 'below batch threshold, holding');
+      if (last[key] === undefined) {
+        last[key] = bucket;
+        changed = true;
         continue;
       }
-      const text = fillsTemplate(rts);
-      await this.notify(text, {
-        type: 'fills',
-        userId: uid,
-        data: { count: rts.length, totalProfit: rts.reduce((s, r) => s + r.profit, 0) },
+
+      if (!shouldNotifyMilestone(pct, last[key]!, step)) continue;
+
+      const mail = profitMilestoneTemplate({
+        bot,
+        milestonePct: bucket * step,
       });
-      cursors[uid] = rts[rts.length - 1]!.id;
-      mutated = true;
-      log.info({ uid, count: rts.length, cursor: cursors[uid] }, 'sent fill batch');
+      await this.notify(mail, {
+        type: 'profit_milestone',
+        userId: owner,
+        botId: bot.id,
+        pair: bot.pair,
+        data: {
+          totalPnl: bot.total_pnl_usdt,
+          pct,
+          milestonePct: bucket * step,
+          investment: bot.investment_usdt,
+        },
+      });
+      last[key] = bucket;
+      changed = true;
+      log.info({ botId: bot.id, pct, bucket, step }, 'profit milestone sent');
     }
-    if (mutated) this.state.update({ lastRoundtripIdByUser: cursors });
+
+    if (changed) this.state.update({ lastProfitMilestoneByBot: last });
   }
 
   // ── Status transitions ─────────────────────────────────────────────
@@ -380,18 +400,22 @@ export class Notifier {
       if (previous && previous !== bot.status) {
         const owner = this.ownerOf(bot);
         if (!owner) continue;
-        const text = statusChangeTemplate(bot, previous, bot.status);
-        await this.notify(text, {
-          type: 'status_change',
-          userId: owner,
-          botId: bot.id,
-          pair: bot.pair,
-          data: { from: previous, to: bot.status },
-        });
-        log.info(
-          { bot: bot.id, from: previous, to: bot.status },
-          'status transition'
-        );
+        if (!isImportantStatus(bot.status)) {
+          log.debug({ bot: bot.id, from: previous, to: bot.status }, 'status skipped (not material)');
+        } else {
+          const mail = statusChangeTemplate(bot, previous, bot.status);
+          await this.notify(mail, {
+            type: 'status_change',
+            userId: owner,
+            botId: bot.id,
+            pair: bot.pair,
+            data: { from: previous, to: bot.status },
+          });
+          log.info(
+            { bot: bot.id, from: previous, to: bot.status },
+            'status transition'
+          );
+        }
       }
       if (lastStatus[String(bot.id)] !== bot.status) {
         lastStatus[String(bot.id)] = bot.status;
@@ -422,17 +446,19 @@ export class Notifier {
     }
 
     const hwmMap = { ...this.state.get().equityHwmByUser };
-    const errorMap = { ...this.state.get().lastErrorHashByUser };
+    const latch = { ...this.state.get().drawdownLatchByUser };
+    const sentOn = { ...this.state.get().drawdownSentOnByUser };
+    const today = new Date().toISOString().slice(0, 10);
     let hwmChanged = false;
-    let errorChanged = false;
+    let latchChanged = false;
+    let sentOnChanged = false;
 
     for (const [uid, equity] of equityByUser) {
-      const hwm = hwmMap[uid] ?? equity;
-      if (equity > hwm) {
+      if (hwmMap[uid] === undefined || equity > hwmMap[uid]) {
         hwmMap[uid] = equity;
         hwmChanged = true;
-        continue;
       }
+      const peak = hwmMap[uid] ?? equity;
       // F.1: per-bot drawdown override only applies when the user has a
       // single bot (otherwise multiple thresholds would compete).
       const userBots = botsByUser.get(uid) ?? [];
@@ -440,39 +466,59 @@ export class Notifier {
         ? userBots[0]!.alert_drawdown_pct!
         : this.cfg.drawdownPct;
 
-      const dropPct = hwm > 0 ? ((hwm - equity) / hwm) * 100 : 0;
-      if (dropPct >= threshold) {
-        const bucket = Math.floor(dropPct / threshold);
-        const hash = `dd:${hwm.toFixed(0)}:${bucket}`;
-        if (errorMap[uid] === hash) continue;
-        const text = drawdownTemplate(equity, hwm, threshold);
-        await this.notify(text, {
-          type: 'drawdown',
-          userId: uid,
-          data: { equity, hwm, dropPct, threshold },
-        });
-        errorMap[uid] = hash;
-        errorChanged = true;
-        log.warn({ uid, equity, hwm, dropPct }, 'drawdown alert sent');
+      const dropPct = peak > 0 ? ((peak - equity) / peak) * 100 : 0;
+      const active = dropPct >= threshold;
+      if (!active) {
+        if (latch[uid]) {
+          delete latch[uid];
+          latchChanged = true;
+        }
+        continue;
       }
+      if (latch[uid] || sentOn[uid] === today) continue;
+
+      const mail = drawdownTemplate(equity, peak, threshold);
+      await this.notify(mail, {
+        type: 'drawdown',
+        userId: uid,
+        data: { equity, hwm: peak, dropPct, threshold },
+      });
+      latch[uid] = true;
+      latchChanged = true;
+      sentOn[uid] = today;
+      sentOnChanged = true;
+      log.warn({ uid, equity, hwm: peak, dropPct }, 'drawdown alert sent');
     }
 
-    if (hwmChanged || errorChanged) {
+    if (hwmChanged || latchChanged || sentOnChanged) {
       this.state.update({
         ...(hwmChanged ? { equityHwmByUser: hwmMap } : {}),
-        ...(errorChanged ? { lastErrorHashByUser: errorMap } : {}),
+        ...(latchChanged ? { drawdownLatchByUser: latch } : {}),
+        ...(sentOnChanged ? { drawdownSentOnByUser: sentOn } : {}),
       });
     }
   }
 
   // ── F.2: Liquidation proximity ─────────────────────────────────────
   private async checkLiqProximity(bots: BotRow[]): Promise<void> {
-    const errorMap = { ...this.state.get().lastErrorHashByUser };
+    const latch = { ...this.state.get().liqLatchByBot };
     let changed = false;
+    const seen = new Set<string>();
     for (const bot of bots) {
-      if (bot.status !== 'running') continue;
-      if (!bot.liquidation_price || bot.liquidation_price <= 0) continue;
-      if (!bot.avg_entry_price || bot.avg_entry_price <= 0) continue;
+      const key = String(bot.id);
+      seen.add(key);
+      const measurable = bot.status === 'running'
+        && !!bot.liquidation_price
+        && bot.liquidation_price > 0
+        && !!bot.avg_entry_price
+        && bot.avg_entry_price > 0;
+      if (!measurable) {
+        if (latch[key]) {
+          delete latch[key];
+          changed = true;
+        }
+        continue;
+      }
 
       const markPrice = await this.db.getLastFillPrice(bot.id);
       if (!markPrice) continue;
@@ -484,29 +530,45 @@ export class Notifier {
         ? ((markPrice - bot.liquidation_price) / markPrice) * 100
         : ((bot.liquidation_price - markPrice) / markPrice) * 100;
 
-      if (distancePct <= threshold && distancePct > 0) {
-        const owner = this.ownerOf(bot);
-        if (!owner) continue;
-        const uid = owner;
-        // Dedup: per-user, bot+bucket so the alert re-fires if it gets worse
-        const bucket = Math.floor(distancePct / 5);
-        const hash = `liq:${bot.id}:${bucket}`;
-        if (errorMap[uid] === hash) continue;
+      const active = distancePct <= threshold && distancePct > 0;
+      const action = latchAction(active, latch[key] === true);
+      if (action === 'release') {
+        if (latch[key]) {
+          delete latch[key];
+          changed = true;
+        }
+        continue;
+      }
+      if (action === 'hold') continue;
 
-        const text = liqProximityTemplate(bot, markPrice, bot.liquidation_price, distancePct);
-        await this.notify(text, {
-          type: 'liq_proximity',
-          userId: owner,
-          botId: bot.id,
-          pair: bot.pair,
-          data: { markPrice, liqPrice: bot.liquidation_price, distancePct },
-        });
-        errorMap[uid] = hash;
+      const owner = this.ownerOf(bot);
+      if (!owner) continue;
+
+      const mail = liqProximityTemplate(
+        bot,
+        markPrice,
+        bot.liquidation_price,
+        distancePct,
+        threshold,
+      );
+      await this.notify(mail, {
+        type: 'liq_proximity',
+        userId: owner,
+        botId: bot.id,
+        pair: bot.pair,
+        data: { markPrice, liqPrice: bot.liquidation_price, distancePct },
+      });
+      latch[key] = true;
+      changed = true;
+      log.warn({ botId: bot.id, distancePct }, 'liq proximity alert sent');
+    }
+    for (const key of Object.keys(latch)) {
+      if (!seen.has(key)) {
+        delete latch[key];
         changed = true;
-        log.warn({ botId: bot.id, distancePct }, 'liq proximity alert sent');
       }
     }
-    if (changed) this.state.update({ lastErrorHashByUser: errorMap });
+    if (changed) this.state.update({ liqLatchByBot: latch });
   }
 
   // ── Daily summary ──────────────────────────────────────────────────

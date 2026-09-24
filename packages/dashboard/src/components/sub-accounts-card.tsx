@@ -222,7 +222,40 @@ export function SubAccountsCard() {
       >
         <div className="space-y-3">
           <Input
+            positive
+            label={t('settings.subAccounts.apiKey')}
+            value={addState.apiKey}
+            onChange={(e) =>
+              setAddState({ ...addState, apiKey: e.target.value })
+            }
+            disabled={createMutation.isPending}
+            autoComplete="off"
+            className={addState.apiKey.length > 0 ? 'border-ok' : undefined}
+          />
+          <Input
+            positive
+            label={t('settings.subAccounts.apiSecret')}
+            type="password"
+            value={addState.apiSecret}
+            onChange={(e) =>
+              setAddState({ ...addState, apiSecret: e.target.value })
+            }
+            disabled={createMutation.isPending}
+            autoComplete="off"
+            className={
+              /^0x[0-9a-fA-F]{64}$/.test(addState.apiSecret) ? 'border-ok' : undefined
+            }
+            helper={
+              addState.apiSecret &&
+              !/^0x[0-9a-fA-F]{64}$/.test(addState.apiSecret)
+                ? t('settings.subAccounts.apiSecretError')
+                : undefined
+            }
+          />
+          <Input
+            positive
             label={t('settings.subAccounts.label')}
+            className={addState.label.length > 0 ? 'border-ok' : undefined}
             placeholder={t('settings.subAccounts.labelPlaceholder')}
             value={addState.label}
             onChange={(e) =>
@@ -232,46 +265,7 @@ export function SubAccountsCard() {
             autoComplete="off"
           />
           <Input
-            label={t('settings.subAccounts.apiKey')}
-            value={addState.apiKey}
-            onChange={(e) =>
-              setAddState({ ...addState, apiKey: e.target.value })
-            }
-            disabled={createMutation.isPending}
-            autoComplete="off"
-          />
-          <Input
-            label={t('settings.subAccounts.apiSecret')}
-            type="password"
-            value={addState.apiSecret}
-            onChange={(e) =>
-              setAddState({ ...addState, apiSecret: e.target.value })
-            }
-            disabled={createMutation.isPending}
-            autoComplete="off"
-            error={
-              addState.apiSecret &&
-              !/^0x[0-9a-fA-F]{64}$/.test(addState.apiSecret)
-                ? t('settings.subAccounts.apiSecretError')
-                : undefined
-            }
-          />
-          <Input
-            label={t('settings.subAccounts.tradingAddress')}
-            value={addState.tradingAddress}
-            onChange={(e) =>
-              setAddState({ ...addState, tradingAddress: e.target.value })
-            }
-            disabled={createMutation.isPending}
-            autoComplete="off"
-            error={
-              addState.tradingAddress &&
-              !/^0x[0-9a-fA-F]{40}$/.test(addState.tradingAddress)
-                ? t('settings.subAccounts.tradingAddressError')
-                : undefined
-            }
-          />
-          <Input
+            positive
             label={t('settings.subAccounts.accountId')}
             value={addState.accountId}
             onChange={(e) =>
@@ -279,10 +273,32 @@ export function SubAccountsCard() {
             }
             disabled={createMutation.isPending}
             autoComplete="off"
+            className={addState.accountId.length > 0 ? 'border-ok' : undefined}
+          />
+          <Input
+            positive
+            label={t('settings.subAccounts.tradingAddress')}
+            value={addState.tradingAddress}
+            onChange={(e) =>
+              setAddState({ ...addState, tradingAddress: e.target.value })
+            }
+            disabled={createMutation.isPending}
+            autoComplete="off"
+            className={
+              /^0x[0-9a-fA-F]{40}$/.test(addState.tradingAddress) ? 'border-ok' : undefined
+            }
+            helper={
+              addState.tradingAddress &&
+              !/^0x[0-9a-fA-F]{40}$/.test(addState.tradingAddress)
+                ? t('settings.subAccounts.tradingAddressError')
+                : undefined
+            }
           />
           <div className="space-y-1">
             <Input
+              positive
               label={t('settings.subAccounts.subAccountId')}
+              className={addState.subAccountId.length > 0 ? 'border-ok' : undefined}
               value={addState.subAccountId}
               onChange={(e) =>
                 setAddState({ ...addState, subAccountId: e.target.value })

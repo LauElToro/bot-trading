@@ -1,5 +1,7 @@
 import type { QueryExecutor } from '../database/postgres.js';
 import type { UserId } from '../auth/user-id.js';
+import { livePnlSql } from './live-pnl.js';
+import { ensurePublishedAuthorTags, identityName, parseTagList } from './profile-tags.js';
 
 export interface PublishedBotRow {
   id: number;
@@ -29,19 +31,28 @@ export interface PublishedBotRow {
   published_at: number;
   updated_at: number;
   seed_key?: string | null;
+  source_status?: string | null;
+  source_created_at?: string | null;
+  source_updated_at?: string | null;
+  roundtrips?: number | null;
   author_name: string | null;
   author_email: string;
-  author_has_avatar: number;
+  author_has_avatar: number | boolean | string | null;
+  author_avatar_updated_at?: number | string | null;
+  author_tags?: unknown;
 }
 
 const AUTHOR_TOTAL_SEED = 'featured-author-total';
 const HIDDEN_FEATURED_SEED = 'featured-bnb-10x-80';
 
-function publicName(displayName: string | null | undefined, email: string): string {
-  const trimmed = displayName?.trim();
-  if (trimmed) return trimmed;
-  const local = email.split('@')[0] ?? 'trader';
-  return local.slice(0, 24);
+export function publicName(displayName: string | null | undefined, email: string): string {
+  return identityName(displayName, email);
+}
+
+function avatarStamp(value: number | string | null | undefined): number | null {
+  if (value == null || value === '') return null;
+  const stamp = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(stamp) && stamp > 0 ? Math.trunc(stamp) : null;
 }
 
 export function rangeWidthPct(lower: number, upper: number): number {
@@ -76,7 +87,44 @@ export function parseMarkPrice(ticker: unknown): number | null {
   return Number.isFinite(mark) && mark > 0 ? mark : null;
 }
 
+export type LeaderLiveStatus = 'running' | 'paused' | 'stopped' | 'closed' | 'aggregate';
+
+function toEpoch(value: unknown): number | null {
+  if (value == null || value === '') return null;
+  if (value instanceof Date) {
+    const ms = value.getTime();
+    return Number.isFinite(ms) ? ms : null;
+  }
+  if (typeof value === 'number') return value > 1e12 ? value : value * 1000;
+  const ms = Date.parse(String(value));
+  return Number.isFinite(ms) ? ms : null;
+}
+
+export function sessionDurationMs(
+  status: LeaderLiveStatus,
+  startedAt: number | null,
+  endedAt: number | null,
+  now = Date.now(),
+): number | null {
+  if (startedAt == null) return null;
+  const end = status === 'running' || status === 'paused' ? now : endedAt;
+  if (end == null) return null;
+  return Math.max(0, end - startedAt);
+}
+
+export function leaderLiveStatus(row: PublishedBotRow): LeaderLiveStatus {
+  if (row.seed_key === AUTHOR_TOTAL_SEED) return 'aggregate';
+  if (row.source_status === 'running' || row.source_status === 'paused' || row.source_status === 'stopped') {
+    return row.source_status;
+  }
+  return 'closed';
+}
+
 export function toLeaderCard(row: PublishedBotRow, rank: number) {
+  const liveStatus = leaderLiveStatus(row);
+  const startedAt = toEpoch(row.source_created_at);
+  const updatedAt = toEpoch(row.source_updated_at);
+  const endedAt = liveStatus === 'stopped' ? updatedAt : null;
   return {
     id: row.id,
     rank,
@@ -100,11 +148,19 @@ export function toLeaderCard(row: PublishedBotRow, rank: number) {
     pnlPct: row.pnl_pct,
     copiesCount: row.copies_count,
     publishedAt: row.published_at,
+    liveStatus,
+    startedAt,
+    endedAt,
+    durationMs: sessionDurationMs(liveStatus, startedAt, endedAt),
+    roundtrips: Number(row.roundtrips ?? 0),
+    sourceBotId: row.source_bot_id,
     isAuthorTotal: row.seed_key === AUTHOR_TOTAL_SEED,
     author: {
       id: row.user_id,
       name: publicName(row.author_name, row.author_email),
-      hasAvatar: row.author_has_avatar === 1,
+      hasAvatar: row.author_has_avatar === 1 || row.author_has_avatar === true || row.author_has_avatar === '1',
+      avatarUpdatedAt: avatarStamp(row.author_avatar_updated_at),
+      tags: parseTagList(row.author_tags),
     },
   };
 }
@@ -118,20 +174,31 @@ const LEADER_SELECT = `
     pb.safeguard_enabled, pb.safeguard_threshold_pct, pb.safeguard_action,
     pb.pnl_usdt, pb.pnl_pct, pb.copies_count, pb.published_at, pb.updated_at,
     pb.seed_key,
+    gb.status AS source_status,
+    gb.created_at AS source_created_at,
+    gb.updated_at AS source_updated_at,
+    (SELECT COUNT(*) FROM paired_roundtrips pr WHERE pr.bot_id = pb.source_bot_id) AS roundtrips,
     u.display_name AS author_name,
     u.email AS author_email,
-    CASE WHEN u.avatar_url IS NOT NULL AND u.avatar_url <> '' THEN 1 ELSE 0 END AS author_has_avatar
+    CASE WHEN u.avatar_url IS NOT NULL AND u.avatar_url <> '' THEN 1 ELSE 0 END AS author_has_avatar,
+    u.avatar_updated_at AS author_avatar_updated_at,
+    (
+      SELECT COALESCE(json_agg(ut.tag ORDER BY ut.position), '[]'::json)
+      FROM user_tags ut
+      WHERE ut.user_id = u.id
+    ) AS author_tags
   FROM published_bots pb
   JOIN users u ON u.id = pb.user_id
+  LEFT JOIN grid_bots gb ON gb.id = pb.source_bot_id
 `;
 
 export async function refreshPublishedStats(db: QueryExecutor): Promise<void> {
   await db.run(`
     UPDATE published_bots pb
     SET
-      pnl_usdt = gb.total_pnl_usdt,
+      pnl_usdt = ${livePnlSql('gb')},
       pnl_pct = CASE
-        WHEN gb.investment_usdt > 0 THEN (gb.total_pnl_usdt / gb.investment_usdt) * 100
+        WHEN gb.investment_usdt > 0 THEN (${livePnlSql('gb')} / gb.investment_usdt) * 100
         ELSE 0
       END,
       updated_at = ?
@@ -140,9 +207,107 @@ export async function refreshPublishedStats(db: QueryExecutor): Promise<void> {
   `, [Date.now()]);
 }
 
+/**
+ * A tap on Copiar records the person. The created bot only counts as a
+ * copy when copied_from_bot_id is set. Older wizards saved the bot
+ * without that link, so match the bot created just after the tap.
+ */
+export async function linkUnlinkedCopies(db: QueryExecutor): Promise<void> {
+  await db.run(`
+    UPDATE grid_bots AS c
+    SET copied_from_bot_id = matched.source_bot_id
+    FROM (
+      SELECT DISTINCT ON (c2.id)
+        c2.id AS bot_id,
+        pb.source_bot_id
+      FROM grid_bots c2
+      JOIN published_bot_copies pbc ON pbc.copier_id = c2.user_id
+      JOIN published_bots pb ON pb.id = pbc.published_id
+      WHERE c2.copied_from_bot_id IS NULL
+        AND pb.source_bot_id IS NOT NULL
+        AND pb.seed_key IS NULL
+        AND c2.user_id IS DISTINCT FROM pb.user_id
+        AND c2.pair = pb.pair
+        AND c2.created_at >= to_timestamp(pbc.created_at / 1000.0) - interval '10 minutes'
+      ORDER BY c2.id, ABS(EXTRACT(EPOCH FROM (c2.created_at - to_timestamp(pbc.created_at / 1000.0))))
+    ) matched
+    WHERE c.id = matched.bot_id
+  `);
+}
+
+/** Stopped bots belong on the finished podium even if nobody hit Publicar. */
+export async function publishStoppedBots(db: QueryExecutor): Promise<void> {
+  const now = Date.now();
+  await db.run(`
+    INSERT INTO published_bots (
+      user_id, source_bot_id, title, pair, direction, leverage,
+      lower_price, upper_price, num_grids, investment_usdt,
+      virtual_enabled, active_window_size, sl_pct, tp_pct,
+      auto_shift_enabled, auto_shift_pct, compound_pct,
+      safeguard_enabled, safeguard_threshold_pct, safeguard_action,
+      pnl_usdt, pnl_pct, copies_count, published_at, updated_at
+    )
+    SELECT
+      gb.user_id,
+      gb.id,
+      gb.pair,
+      gb.pair,
+      gb.direction,
+      gb.leverage,
+      gb.lower_price,
+      gb.upper_price,
+      gb.num_grids,
+      gb.investment_usdt,
+      CASE WHEN COALESCE(gb.virtual_enabled, 0) <> 0 THEN 1 ELSE 0 END,
+      gb.active_window_size,
+      gb.sl_pct,
+      gb.tp_pct,
+      CASE WHEN COALESCE(gb.auto_shift_enabled, 0) <> 0 THEN 1 ELSE 0 END,
+      gb.auto_shift_pct,
+      gb.compound_pct,
+      CASE WHEN COALESCE(gb.safeguard_enabled, 0) <> 0 THEN 1 ELSE 0 END,
+      gb.safeguard_threshold_pct,
+      gb.safeguard_action,
+      COALESCE(gb.grid_profit_usdt, 0) + COALESCE(gb.trend_pnl_usdt, 0),
+      CASE
+        WHEN gb.investment_usdt > 0 THEN
+          ((COALESCE(gb.grid_profit_usdt, 0) + COALESCE(gb.trend_pnl_usdt, 0)) / gb.investment_usdt) * 100
+        ELSE 0
+      END,
+      0,
+      (EXTRACT(EPOCH FROM COALESCE(gb.updated_at, gb.created_at, NOW())) * 1000)::bigint,
+      ?
+    FROM grid_bots gb
+    WHERE gb.status = 'stopped'
+      AND gb.user_id IS NOT NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM published_bots pb WHERE pb.source_bot_id = gb.id
+      )
+  `, [now]);
+  await db.run(`
+    UPDATE published_bots pb
+    SET
+      pnl_usdt = COALESCE(gb.grid_profit_usdt, 0) + COALESCE(gb.trend_pnl_usdt, 0),
+      pnl_pct = CASE
+        WHEN gb.investment_usdt > 0 THEN
+          ((COALESCE(gb.grid_profit_usdt, 0) + COALESCE(gb.trend_pnl_usdt, 0)) / gb.investment_usdt) * 100
+        ELSE 0
+      END,
+      updated_at = ?
+    FROM grid_bots gb
+    WHERE pb.source_bot_id = gb.id
+      AND gb.status = 'stopped'
+      AND pb.seed_key IS NULL
+  `, [now]);
+}
+
 export async function listLeaders(db: QueryExecutor, limit = 10): Promise<PublishedBotRow[]> {
+  await seedFeaturedLeaders(db);
+  await linkUnlinkedCopies(db);
+  await publishStoppedBots(db);
   await refreshPublishedStats(db);
   await refreshAuthorTotals(db);
+  await ensurePublishedAuthorTags(db);
   return db.all<PublishedBotRow>(`
     ${LEADER_SELECT}
     WHERE pb.seed_key IS NULL OR pb.seed_key <> ?
@@ -214,12 +379,12 @@ const FEATURED_LEADERS = [
     pair: 'ETH_USDT_Perp',
     direction: 'long' as const,
     leverage: 10,
-    lower: 2386,
-    upper: 2665,
+    lower: 2555.34,
+    upper: 2833.34,
     grids: 50,
-    investment: 100,
-    pnlUsdt: 43.09,
-    pnlPct: 43.09,
+    investment: 151.19,
+    pnlUsdt: 96.49,
+    pnlPct: 63.82,
   },
   {
     seedKey: 'featured-bnb-10x-90',
@@ -269,13 +434,29 @@ const FEATURED_LEADERS = [
     lower: 1,
     upper: 2,
     grids: 2,
-    investment: 420,
-    pnlUsdt: 57.59,
-    pnlPct: 61.64,
+    investment: 321.19,
+    pnlUsdt: 110.41,
+    pnlPct: 81.99,
   },
 ];
 
 async function authorBotPctTotal(db: QueryExecutor, userId: string): Promise<{ pct: number; usdt: number; investment: number }> {
+  // Showcase total = visible published cards. A paused live bot with
+  // investment but $0 PnL must not wipe the podium (seen 2026-09-21).
+  const published = await db.get<{ pct: number; usdt: number; investment: number }>(
+    `SELECT
+       COALESCE(SUM(pnl_pct), 0) AS pct,
+       COALESCE(SUM(pnl_usdt), 0) AS usdt,
+       COALESCE(SUM(investment_usdt), 0) AS investment
+     FROM published_bots
+     WHERE user_id = ?
+       AND (seed_key IS NULL OR seed_key NOT IN (?, ?))`,
+    [userId, AUTHOR_TOTAL_SEED, HIDDEN_FEATURED_SEED],
+  );
+  if (published && (published.pct !== 0 || published.usdt !== 0)) {
+    return { pct: published.pct, usdt: published.usdt, investment: published.investment };
+  }
+
   const live = await db.get<{ pct: number; usdt: number; investment: number }>(
     `SELECT
        COALESCE(SUM(CASE WHEN investment_usdt > 0 THEN (total_pnl_usdt / investment_usdt) * 100 ELSE 0 END), 0) AS pct,
@@ -285,19 +466,10 @@ async function authorBotPctTotal(db: QueryExecutor, userId: string): Promise<{ p
      WHERE user_id = ?`,
     [userId],
   );
-  if (live && live.investment > 0) {
+  if (live && live.investment > 0 && (live.pct !== 0 || live.usdt !== 0)) {
     return { pct: live.pct, usdt: live.usdt, investment: live.investment };
   }
-  const published = await db.get<{ pct: number; usdt: number; investment: number }>(
-    `SELECT
-       COALESCE(SUM(pnl_pct), 0) AS pct,
-       COALESCE(SUM(pnl_usdt), 0) AS usdt,
-       COALESCE(SUM(investment_usdt), 0) AS investment
-     FROM published_bots
-     WHERE user_id = ?
-       AND (seed_key IS NULL OR seed_key <> ?)`,
-    [userId, AUTHOR_TOTAL_SEED],
-  );
+
   return {
     pct: published?.pct ?? 0,
     usdt: published?.usdt ?? 0,

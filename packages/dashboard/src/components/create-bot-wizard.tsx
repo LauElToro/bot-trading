@@ -34,7 +34,7 @@ import {
   formatSize,
   formatUsd,
 } from '@/lib/format';
-import type { ValidateBotInput, ValidateBotResult, WizardPreset } from '@/lib/api-types';
+import { ApiError, type ValidateBotInput, type ValidateBotResult, type WizardPreset } from '@/lib/api-types';
 import { cn } from '@/lib/cn';
 import { useT } from '@/i18n';
 
@@ -98,6 +98,117 @@ const FALLBACK_PAIRS = [
 const FEATURED_TICKERS = ['BTC', 'ETH', 'SOL', 'DOGE'];
 
 type Step = 0 | 1 | 2 | 3;
+
+interface FieldIssue {
+  field: string;
+  code: string;
+  message?: string;
+  mark?: number;
+  min?: number;
+  max?: number;
+  pair?: string;
+  direction?: string;
+}
+
+function readFieldIssues(err: unknown): FieldIssue[] {
+  const payload = err instanceof ApiError ? err.payload : undefined;
+  if (payload && typeof payload === 'object') {
+    const issues = (payload as { issues?: FieldIssue[] }).issues;
+    if (Array.isArray(issues) && issues.length > 0) return issues;
+    if ((payload as { error?: string }).error === 'duplicate_instrument') {
+      return [{
+        field: 'direction',
+        code: 'duplicate_direction',
+        message: err instanceof Error ? err.message : undefined,
+      }];
+    }
+  }
+  const message = err instanceof Error ? err.message : '';
+  if (/fuera del rango|outside/i.test(message)) {
+    const mark = Number(message.match(/(\d+(?:\.\d+)?)/)?.[1]);
+    return [{
+      field: 'lower_price',
+      code: 'price_outside_range',
+      mark: Number.isFinite(mark) ? mark : undefined,
+      message,
+    }];
+  }
+  return [{ field: 'form', code: 'generic', message }];
+}
+
+function issueStep(issue: FieldIssue): Step {
+  if (issue.field === 'pair' || issue.field === 'direction' || issue.field === 'sub_account') return 0;
+  if (
+    issue.field === 'lower_price' ||
+    issue.field === 'upper_price' ||
+    issue.code === 'price_outside_range'
+  ) {
+    return 1;
+  }
+  if (
+    issue.field === 'num_grids' ||
+    issue.field === 'investment_usdt' ||
+    issue.field === 'leverage' ||
+    issue.field === 'active_window_size' ||
+    issue.field === 'safeguard_threshold_pct' ||
+    issue.field === 'safeguard_action'
+  ) {
+    return 2;
+  }
+  return 3;
+}
+
+function earliestStep(issues: FieldIssue[]): Step {
+  return issues.reduce((min, issue) => Math.min(min, issueStep(issue)) as Step, 3 as Step);
+}
+
+const FIELD_BY_STATE: Partial<Record<keyof WizardState, string>> = {
+  pair: 'pair',
+  direction: 'direction',
+  lower: 'lower_price',
+  upper: 'upper_price',
+  grids: 'num_grids',
+  investment: 'investment_usdt',
+  leverage: 'leverage',
+  activeWindowSize: 'active_window_size',
+  subAccountId: 'sub_account',
+  virtualEnabled: 'num_grids',
+  safeguardThresholdPct: 'safeguard_threshold_pct',
+  safeguardAction: 'safeguard_action',
+  safeguardEnabled: 'safeguard_action',
+};
+
+function issueCopy(
+  t: (key: string, vars?: Record<string, string | number>) => string,
+  issue: FieldIssue,
+): { title: string; fix: string } {
+  const vars = {
+    mark: issue.mark != null ? formatUsd(issue.mark) : '—',
+    pair: (issue.pair ?? '').replace(/_/g, ' '),
+    direction: issue.direction === 'short' ? t('wizard.shortTitle') : t('wizard.longTitle'),
+    min: issue.min ?? '',
+    max: issue.max ?? '',
+  };
+  if (issue.code === 'generic' || !issue.code) {
+    return {
+      title: issue.message || t('wizard.issues.generic.title'),
+      fix: t('wizard.issues.generic.fix'),
+    };
+  }
+  return {
+    title: t(`wizard.issues.${issue.code}.title`, vars),
+    fix: t(`wizard.issues.${issue.code}.fix`, vars),
+  };
+}
+
+function fieldError(
+  t: (key: string, vars?: Record<string, string | number>) => string,
+  issues: FieldIssue[],
+  field: string,
+): string | undefined {
+  const issue = issues.find((item) => item.field === field || (field === 'upper_price' && item.code === 'price_outside_range'));
+  return issue ? issueCopy(t, issue).title : undefined;
+}
 const STEP_LABEL_KEYS = [
   'wizard.stepPair',
   'wizard.stepRange',
@@ -141,6 +252,7 @@ export function CreateBotWizard({ open, onClose, preset }: CreateBotWizardProps)
   const t = useT();
   const [step, setStep] = useState<Step>(0);
   const [state, setState] = useState<WizardState>(() => applyPreset(preset));
+  const [fieldIssues, setFieldIssues] = useState<FieldIssue[]>([]);
   const [validated, setValidated] = useState<ValidateBotResult | null>(null);
   const navigate = useNavigate();
 
@@ -182,13 +294,22 @@ export function CreateBotWizard({ open, onClose, preset }: CreateBotWizardProps)
       handleClose();
     },
     onError: (err: Error) => {
-      toast.error(t('wizard.createFailedToast', { msg: err.message }));
+      const issues = readFieldIssues(err);
+      setFieldIssues(issues);
+      setStep(earliestStep(issues));
+      const first = issues[0];
+      toast.error(
+        first
+          ? issueCopy(t, first).title
+          : t('wizard.createFailedToast', { msg: err.message }),
+      );
     },
   });
 
   function handleClose() {
     setStep(0);
     setState(INITIAL_STATE);
+    setFieldIssues([]);
     setValidated(null);
     validateMutation.reset();
     createMutation.reset();
@@ -237,11 +358,24 @@ export function CreateBotWizard({ open, onClose, preset }: CreateBotWizardProps)
       ...autoShiftPayload,
       ...virtualPayload,
       ...subAccountPayload,
+      ...(preset?.copiedFrom?.sourceBotId
+        ? { copied_from_bot_id: preset.copiedFrom.sourceBotId }
+        : {}),
     } as any);
   }
 
   function update<K extends keyof WizardState>(key: K, value: WizardState[K]) {
     setState((s) => ({ ...s, [key]: value }));
+    const mapped = FIELD_BY_STATE[key];
+    if (mapped) {
+      setFieldIssues((prev) =>
+        prev.filter((issue) => {
+          if (issue.field === mapped) return false;
+          if ((key === 'lower' || key === 'upper') && issue.code === 'price_outside_range') return false;
+          return true;
+        }),
+      );
+    }
     if (
       key !== 'acceptedRisk' &&
       key !== 'compoundPct' &&
@@ -258,26 +392,39 @@ export function CreateBotWizard({ open, onClose, preset }: CreateBotWizardProps)
     }
   }
 
-  function next() {
-    if (step === 2) {
-      const input: ValidateBotInput = {
-        pair: state.pair,
-        direction: state.direction,
-        lower_price: parseFloat(state.lower),
-        upper_price: parseFloat(state.upper),
-        num_grids: parseInt(state.grids, 10),
-        investment_usdt: parseFloat(state.investment),
-        leverage: parseInt(state.leverage, 10),
-        ...(state.virtualEnabled
-          ? {
-              virtual_enabled: true,
-              active_window_size: parseInt(state.activeWindowSize || '70', 10),
-            }
-          : {}),
-      } as ValidateBotInput;
-      validateMutation.mutate(input);
+  async function next() {
+    if (step !== 2) {
+      setStep((s) => Math.min(3, s + 1) as Step);
+      return;
     }
-    setStep((s) => Math.min(3, s + 1) as Step);
+    const input: ValidateBotInput = {
+      pair: state.pair,
+      direction: state.direction,
+      lower_price: parseFloat(state.lower),
+      upper_price: parseFloat(state.upper),
+      num_grids: parseInt(state.grids, 10),
+      investment_usdt: parseFloat(state.investment),
+      leverage: parseInt(state.leverage, 10),
+      ...(state.virtualEnabled
+        ? {
+            virtual_enabled: true,
+            active_window_size: parseInt(state.activeWindowSize || '70', 10),
+          }
+        : {}),
+      ...(state.subAccountId
+        ? { grvt_sub_account_id: parseInt(state.subAccountId, 10) }
+        : {}),
+    };
+    try {
+      const result = await validateMutation.mutateAsync(input);
+      setValidated(result);
+      setFieldIssues([]);
+      setStep(3);
+    } catch (err) {
+      const issues = readFieldIssues(err);
+      setFieldIssues(issues);
+      setStep(earliestStep(issues));
+    }
   }
 
   function back() {
@@ -343,7 +490,7 @@ export function CreateBotWizard({ open, onClose, preset }: CreateBotWizardProps)
             </Button>
           )}
           {step < 3 ? (
-            <Button onClick={next} disabled={!canNext}>
+            <Button onClick={() => void next()} disabled={!canNext || validateMutation.isPending}>
               {t('wizard.continueBtn')}
               <ChevronRight className="size-4" />
             </Button>
@@ -363,6 +510,9 @@ export function CreateBotWizard({ open, onClose, preset }: CreateBotWizardProps)
       {preset?.copiedFrom && (
         <div className="mb-5 border border-primary/35 bg-primary-soft px-3 py-2 text-xs text-text-secondary">
           <p>{t('wizard.copiedFrom', { name: preset.copiedFrom.authorName })}</p>
+          {preset.copiedFrom.sourceBotId != null && (
+            <p className="mt-1">{t('wizard.copiedClosesWithSource')}</p>
+          )}
           {preset.copiedFrom.rangeAdapted &&
             preset.copiedFrom.markPrice != null &&
             preset.copiedFrom.originalLower != null &&
@@ -377,11 +527,18 @@ export function CreateBotWizard({ open, onClose, preset }: CreateBotWizardProps)
             )}
         </div>
       )}
+      <IssueCallout issues={fieldIssues.filter((issue) => issueStep(issue) === step)} />
       {step === 0 && (
-        <StepPair state={state} update={update} pairs={PAIRS} subAccounts={subAccounts} />
+        <StepPair
+          state={state}
+          update={update}
+          pairs={PAIRS}
+          subAccounts={subAccounts}
+          issues={fieldIssues}
+        />
       )}
-      {step === 1 && <StepRange state={state} update={update} />}
-      {step === 2 && <StepConfig state={state} update={update} />}
+      {step === 1 && <StepRange state={state} update={update} issues={fieldIssues} />}
+      {step === 2 && <StepConfig state={state} update={update} issues={fieldIssues} />}
       {step === 3 && (
         <StepConfirm
           state={state}
@@ -389,9 +546,33 @@ export function CreateBotWizard({ open, onClose, preset }: CreateBotWizardProps)
           validated={validated}
           isValidating={validateMutation.isPending}
           error={validateMutation.error as Error | null}
+          issues={fieldIssues}
         />
       )}
     </Modal>
+  );
+}
+
+function IssueCallout({ issues }: { issues: FieldIssue[] }) {
+  const t = useT();
+  if (issues.length === 0) return null;
+  return (
+    <div className="mb-4 border border-danger/40 bg-danger-soft/40 p-3">
+      <div className="flex items-start gap-2 text-danger">
+        <AlertTriangle className="mt-0.5 size-4 shrink-0" />
+        <div className="space-y-3">
+          {issues.map((issue) => {
+            const copy = issueCopy(t, issue);
+            return (
+              <div key={`${issue.field}-${issue.code}`}>
+                <p className="text-sm font-semibold">{copy.title}</p>
+                <p className="mt-1 text-xs leading-5 text-text-secondary">{copy.fix}</p>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -445,13 +626,18 @@ function StepPair({
   update,
   pairs,
   subAccounts,
+  issues,
 }: {
   state: WizardState;
   update: <K extends keyof WizardState>(k: K, v: WizardState[K]) => void;
   pairs: Array<{ value: string; label: string }>;
   subAccounts: Array<{ id: number; label: string; isDefault: boolean }>;
+  issues: FieldIssue[];
 }) {
   const t = useT();
+  const pairError = fieldError(t, issues, 'pair');
+  const directionError = fieldError(t, issues, 'direction');
+  const subError = fieldError(t, issues, 'sub_account');
   const [query, setQuery] = useState('');
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -491,10 +677,12 @@ function StepPair({
               ))}
             </select>
             <p className="mt-1 text-2xs text-text-muted">{t('wizard.subAccountHelp')}</p>
+            {subError && <p className="mt-1 text-2xs text-danger">{subError}</p>}
           </div>
         )}
 
         <h3 className="text-sm font-semibold text-text-primary">{t('wizard.selectInstrument')}</h3>
+        {pairError && <p className="mt-1 text-xs text-danger">{pairError}</p>}
         <FieldHelp title={t('wizard.help.pairTitle')}>{t('wizard.help.pairBody')}</FieldHelp>
 
         <label className="relative mt-4 block">
@@ -589,6 +777,7 @@ function StepPair({
       <aside className="flex flex-col gap-4">
         <div>
           <h3 className="text-sm font-semibold text-text-primary">{t('wizard.directionHeading')}</h3>
+          {directionError && <p className="mt-1 text-xs text-danger">{directionError}</p>}
           <FieldHelp title={t('wizard.help.directionTitle')}>{t('wizard.help.directionBody')}</FieldHelp>
           <div className="mt-3 grid gap-2">
             {(
@@ -615,11 +804,13 @@ function StepPair({
                   onClick={() => update('direction', d.id)}
                   className={cn(
                     'flex items-start gap-3 border px-3 py-3 text-left transition-colors',
-                    on
-                      ? d.id === 'long'
-                        ? 'border-success bg-success-soft'
-                        : 'border-danger bg-danger-soft'
-                      : 'border-border-subtle hover:border-border-default',
+                    directionError && !on
+                      ? 'border-danger'
+                      : on
+                        ? d.id === 'long'
+                          ? 'border-success bg-success-soft'
+                          : 'border-danger bg-danger-soft'
+                        : 'border-border-subtle hover:border-border-default',
                   )}
                 >
                   <span
@@ -682,11 +873,15 @@ function StepPair({
 function StepRange({
   state,
   update,
+  issues,
 }: {
   state: WizardState;
   update: <K extends keyof WizardState>(k: K, v: WizardState[K]) => void;
+  issues: FieldIssue[];
 }) {
   const t = useT();
+  const lowerError = fieldError(t, issues, 'lower_price');
+  const upperError = fieldError(t, issues, 'upper_price');
   const lo = parseFloat(state.lower);
   const hi = parseFloat(state.upper);
   const valid = Number.isFinite(lo) && Number.isFinite(hi) && lo > 0 && hi > lo;
@@ -722,6 +917,7 @@ function StepRange({
           numeric
           inputMode="decimal"
           value={state.lower}
+          error={lowerError}
           onChange={(e) => update('lower', e.target.value)}
         />
         <Input
@@ -729,6 +925,7 @@ function StepRange({
           numeric
           inputMode="decimal"
           value={state.upper}
+          error={upperError}
           onChange={(e) => update('upper', e.target.value)}
         />
       </div>
@@ -753,11 +950,17 @@ function StepRange({
 function StepConfig({
   state,
   update,
+  issues,
 }: {
   state: WizardState;
   update: <K extends keyof WizardState>(k: K, v: WizardState[K]) => void;
+  issues: FieldIssue[];
 }) {
   const t = useT();
+  const investmentError = fieldError(t, issues, 'investment_usdt');
+  const leverageError = fieldError(t, issues, 'leverage');
+  const gridsError = fieldError(t, issues, 'num_grids');
+  const windowError = fieldError(t, issues, 'active_window_size');
   const investment = parseFloat(state.investment || '0');
   const leverage = parseInt(state.leverage || '0', 10);
   const notional = investment * leverage;
@@ -777,6 +980,7 @@ function StepConfig({
               numeric
               inputMode="decimal"
               value={state.investment}
+              error={investmentError}
               onChange={(e) => update('investment', e.target.value)}
             />
             <FieldHelp title={t('wizard.help.investmentTitle')}>{t('wizard.help.investmentBody')}</FieldHelp>
@@ -787,6 +991,7 @@ function StepConfig({
               numeric
               inputMode="numeric"
               value={state.leverage}
+              error={leverageError}
               onChange={(e) => update('leverage', e.target.value)}
               helper="1x – 50x"
             />
@@ -819,6 +1024,7 @@ function StepConfig({
               numeric
               inputMode="numeric"
               value={state.grids}
+              error={gridsError}
               onChange={(e) => update('grids', e.target.value)}
               helper={state.virtualEnabled ? '2 – 500 (virtual)' : '2 – 95'}
             />
@@ -850,6 +1056,7 @@ function StepConfig({
                 numeric
                 inputMode="numeric"
                 value={state.activeWindowSize}
+                error={windowError}
                 onChange={(e) => update('activeWindowSize', e.target.value)}
                 helper="20 – 80"
               />
@@ -955,12 +1162,14 @@ function StepConfirm({
   validated,
   isValidating,
   error,
+  issues,
 }: {
   state: WizardState;
   update: <K extends keyof WizardState>(k: K, v: WizardState[K]) => void;
   validated: ValidateBotResult | null;
   isValidating: boolean;
   error: Error | null;
+  issues: FieldIssue[];
 }) {
   const t = useT();
   if (isValidating) {
@@ -972,7 +1181,7 @@ function StepConfirm({
     );
   }
 
-  if (error) {
+  if (error && issues.length === 0) {
     return (
       <div className="border border-danger/40 bg-danger-soft/30 p-4">
         <div className="flex items-start gap-2 text-danger">
@@ -1038,7 +1247,11 @@ function StepConfirm({
               <div className="font-semibold">{t('wizard.warnings')}</div>
               <ul className="mt-1 list-inside list-disc space-y-0.5">
                 {validated.warnings.map((w) => (
-                  <li key={w}>{w}</li>
+                  <li key={w}>
+                    {w === 'opposite_side_active'
+                      ? t('wizard.issues.opposite_side_active.fix')
+                      : w}
+                  </li>
                 ))}
               </ul>
             </div>

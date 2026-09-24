@@ -22,6 +22,7 @@ interface BotRow {
   id: number;
   user_id: string | null;
   pair: string;
+  direction?: 'long' | 'short';
   status: 'paused' | 'running' | 'stopped';
 }
 
@@ -33,7 +34,17 @@ function makeMockDb() {
       // Duplicate-instrument guard (POST /bots)
       if (sql.includes('COUNT(*)') && sql.includes('pair')) {
         const pair = params[1];
-        const c = bots.filter((b) => b.pair === pair && b.status !== 'stopped').length;
+        const direction = sql.includes('direction = ?') || sql.includes('direction <>')
+          ? params[2]
+          : undefined;
+        const c = bots.filter((b) => {
+          if (b.pair !== pair || b.status === 'stopped') return false;
+          if (sql.includes('direction <>')) {
+            return b.status === 'running' && !!b.direction && b.direction !== direction;
+          }
+          if (direction && b.direction && b.direction !== direction) return false;
+          return true;
+        }).length;
         return [{ c }];
       }
       // GET /bots
@@ -45,7 +56,17 @@ function makeMockDb() {
     async get(sql: string, params: unknown[] = []) {
       if (sql.includes('COUNT(*)') && sql.includes('pair')) {
         const pair = params[1];
-        const c = bots.filter((b) => b.pair === pair && b.status !== 'stopped').length;
+        const direction = sql.includes('direction = ?') || sql.includes('direction <>')
+          ? params[2]
+          : undefined;
+        const c = bots.filter((b) => {
+          if (b.pair !== pair || b.status === 'stopped') return false;
+          if (sql.includes('direction <>')) {
+            return b.status === 'running' && !!b.direction && b.direction !== direction;
+          }
+          if (direction && b.direction && b.direction !== direction) return false;
+          return true;
+        }).length;
         return { c };
       }
       if (sql.includes('COUNT(*)') && sql.includes('running')) {
@@ -191,7 +212,7 @@ describe('Bot lifecycle (D.1)', () => {
       .post(`/api/v2/bots/${id}/close`)
       .set('X-Api-Key', API_KEY);
     expect(closed.status).toBe(200);
-    expect(closed.body).toEqual({ id, status: 'stopped' });
+    expect(closed.body).toEqual({ id, status: 'stopped', closedCopies: 0 });
     expect(engineOps.closeBot).toHaveBeenCalledWith(id);
     expect(db._bots.find((b) => b.id === id)?.status).toBe('stopped');
   });

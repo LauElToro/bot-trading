@@ -6,6 +6,10 @@ import { useWsStatus } from '@/lib/use-ws-channel';
 import type { WsStatus } from '@/lib/ws-client';
 import { LanguageToggle, useT } from '@/i18n';
 import { ThemeToggle } from '@/components/theme-toggle';
+import { useAuth } from '@/lib/auth-context';
+import { UserAvatar } from '@/components/user-avatar';
+import { communityAvatarUrl } from '@/lib/avatar';
+import { TraderSearch } from '@/components/trader-search';
 
 const STATUS_KEY: Record<WsStatus, { color: string; key: string }> = {
   open: { color: 'text-success', key: 'wsLive' },
@@ -16,6 +20,7 @@ const STATUS_KEY: Record<WsStatus, { color: string; key: string }> = {
 
 export function Header({ onOpenNav }: { onOpenNav: () => void }) {
   const t = useT();
+  const { user } = useAuth();
   const status = useWsStatus();
   const styles = STATUS_KEY[status];
 
@@ -39,6 +44,8 @@ export function Header({ onOpenNav }: { onOpenNav: () => void }) {
           {t('nav.controlCenter')}
         </p>
 
+        <TraderSearch />
+
         <div className="ml-auto flex items-center gap-2">
           <div
             className={cn(
@@ -58,6 +65,16 @@ export function Header({ onOpenNav }: { onOpenNav: () => void }) {
             />
             {t(`header.${styles.key}` as 'header.wsLive')}
           </div>
+          {user && (
+            <Link to="/dashboard/perfil" aria-label={t('nav.profile')} className="ml-1">
+              <UserAvatar
+                name={user.displayName}
+                email={user.email}
+                src={communityAvatarUrl(user.id, user.hasAvatar, user.avatarUpdatedAt)}
+                size="sm"
+              />
+            </Link>
+          )}
           <LanguageToggle variant="compact" />
           <ThemeToggle />
         </div>

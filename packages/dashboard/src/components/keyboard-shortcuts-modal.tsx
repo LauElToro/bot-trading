@@ -8,6 +8,7 @@ const SHORTCUTS: Array<{ keys: string; actionKey: string }> = [
   { keys: 'g → o', actionKey: 'keyboard.goToOverview' },
   { keys: 'g → b', actionKey: 'keyboard.goToBots' },
   { keys: 'g → p', actionKey: 'keyboard.goToPodium' },
+  { keys: 'g → f', actionKey: 'keyboard.goToProfile' },
   { keys: 'g → h', actionKey: 'keyboard.goToGuide' },
   { keys: 'g → s', actionKey: 'keyboard.goToSettings' },
   { keys: 'n → b', actionKey: 'keyboard.createBot' },

@@ -154,7 +154,7 @@ export function SignupPage() {
     setPending(true);
     setOtpError('');
     try {
-      await verifyOtp(challenge.id, code, email);
+      await verifyOtp(challenge.id, code, email, lang);
       toast.success(copy.created);
       navigate('/dashboard/onboarding/grvt', { replace: true });
     } catch {

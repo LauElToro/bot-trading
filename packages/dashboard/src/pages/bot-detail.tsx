@@ -4,7 +4,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { Pause, Play, Share2, SlidersHorizontal, XCircle } from 'lucide-react';
+import { Pause, Play, Share2, SlidersHorizontal, Wallet, XCircle } from 'lucide-react';
 import { toast } from 'sonner';
 import { api } from '@/lib/api-client';
 import { LiqGauge } from '@/components/charts/liq-gauge';
@@ -26,6 +26,7 @@ import {
   formatTimeUtc,
   formatUsd,
 } from '@/lib/format';
+import { reconcilePnl } from '@/lib/pnl';
 import { Button } from '@/components/primitives/button';
 import { Card } from '@/components/primitives/card';
 import { useConfirm } from '@/components/primitives/confirm-dialog';
@@ -38,11 +39,13 @@ import { DataTable, type Column } from '@/components/primitives/data-table';
 import { EquityCurve } from '@/components/charts/equity-curve';
 import { StatsPanel } from '@/components/stats-panel';
 import { UpdateRangeDialog } from '@/components/update-range-dialog';
+import { UpdateInvestmentDialog } from '@/components/update-investment-dialog';
 import {
   FILL_FLASH_DURATION_MS,
   GridChart,
 } from '@/components/charts/grid-chart';
 import { useT } from '@/i18n';
+import { readPositionLiquidation, resolveLiquidationPrice } from '@/lib/liquidation';
 
 interface BotTick {
   id: number;
@@ -52,6 +55,7 @@ interface BotTick {
   gridProfit: number;
   trendPnl: number;
   totalPnl: number;
+  liquidationPrice?: number;
 }
 
 interface FillEvent {
@@ -193,9 +197,11 @@ export function BotDetailPage() {
       // message ("GRVT login failed for user N") doesn't tell the user
       // what to do. Show a translated message with explicit next step
       // (re-save credentials in Settings) and keep it on screen longer.
-      const code = (_err as { payload?: { code?: string } }).payload?.code;
-      if (code === 'grvt_credentials_invalid') {
+      const payload = (_err as { payload?: { code?: string; error?: string } }).payload;
+      if (payload?.code === 'grvt_credentials_invalid') {
         toast.error(t('botDetail.grvtCredsInvalid'), { duration: 8000 });
+      } else if (payload?.error === 'opposite_side_running') {
+        toast.error(t('botDetail.oppositeSideRunning'), { duration: 8000 });
       } else {
         toast.error(t('botDetail.actionFailed', { msg: _err.message }));
       }
@@ -223,7 +229,14 @@ export function BotDetailPage() {
   const closeMutation = useMutation({
     mutationFn: () => api.closeBot(botId),
     ...optimisticBotUpdate('stopped'),
-    onSuccess: () => toast.success(t('botDetail.closedToast', { id: botId })),
+    onSuccess: (result) => {
+      const n = result.closedCopies ?? 0;
+      toast.success(
+        n > 0
+          ? t('botDetail.closedToastCopies', { id: botId, n })
+          : t('botDetail.closedToast', { id: botId }),
+      );
+    },
   });
 
   const publishMutation = useMutation({
@@ -243,6 +256,7 @@ export function BotDetailPage() {
   // Dialog state for the "Update range" action. Declared up here so the
   // hook count is stable across early returns (Rules of Hooks).
   const [rangeDialogOpen, setRangeDialogOpen] = useState(false);
+  const [amountDialogOpen, setAmountDialogOpen] = useState(false);
 
   // ── Now safe to early-return ──
   if (botQuery.isPending) return <PageSkeleton />;
@@ -261,18 +275,36 @@ export function BotDetailPage() {
 
   const bot = botQuery.data.bot;
   const publishedId = botQuery.data.publishedId ?? null;
+  const activeCopyCount = botQuery.data.activeCopyCount ?? 0;
   const status = tick?.status ?? bot.status;
   const positionSize = tick?.positionSize ?? bot.position_size;
   const avgEntry = tick?.avgEntryPrice ?? bot.avg_entry_price;
-  const totalPnl = tick?.totalPnl ?? bot.total_pnl_usdt;
-  const gridProfit = tick?.gridProfit ?? bot.grid_profit_usdt;
-  const trendPnl = tick?.trendPnl ?? bot.trend_pnl_usdt;
+  const pnl = reconcilePnl(
+    tick?.gridProfit ?? bot.grid_profit_usdt,
+    tick?.trendPnl ?? bot.trend_pnl_usdt,
+    tick?.totalPnl ?? bot.total_pnl_usdt,
+  );
+  const totalPnl = pnl.total;
+  const gridProfit = pnl.realized;
+  const trendPnl = pnl.unrealized;
   const equity = bot.investment_usdt + totalPnl;
   const equityPct = (totalPnl / bot.investment_usdt) * 100;
 
   // useMarkPrice is a plain helper despite the `use*` name — no hooks
   // inside it. Safe to call after the early return.
   const markPrice = useMarkPrice(gridStateQuery.data);
+  const exchangeLiq = readPositionLiquidation(gridStateQuery.data?.position);
+  const tickLiq = tick?.liquidationPrice;
+  const liquidation = resolveLiquidationPrice({
+    exchange: exchangeLiq ?? (tickLiq != null && tickLiq > 0 ? tickLiq : null),
+    stored: bot.liquidation_price,
+    avgEntry,
+    mark: markPrice,
+    lower: bot.lower_price,
+    upper: bot.upper_price,
+    leverage: bot.leverage,
+    direction: bot.direction,
+  });
   const candles = candlesQuery.data?.candles ?? [];
   const levels: GridLevel[] = gridStateQuery.data?.levels ?? [];
 
@@ -392,6 +424,9 @@ export function BotDetailPage() {
               <li>{t('botDetail.confirmClose.noPosition')}</li>
             )}
             <li>{t('botDetail.confirmClose.flipStatus')}</li>
+            {activeCopyCount > 0 && (
+              <li>{t('botDetail.confirmClose.copiesAlso', { n: activeCopyCount })}</li>
+            )}
           </ul>
           <p className="text-2xs text-text-muted">
             {t('botDetail.confirmClose.pauseInstead')}
@@ -444,6 +479,16 @@ export function BotDetailPage() {
             <SlidersHorizontal className="size-4" />
             {t('botDetail.updateRange')}
           </Button>
+          {status !== 'stopped' && (
+            <Button
+              variant="secondary"
+              onClick={() => setAmountDialogOpen(true)}
+              title={t('botDetail.updateInvestmentHint')}
+            >
+              <Wallet className="size-4" />
+              {t('botDetail.updateInvestment')}
+            </Button>
+          )}
           {status === 'running' ? (
             <Button
               variant="secondary"
@@ -533,20 +578,29 @@ export function BotDetailPage() {
           }
         />
         <StatCard
-          label={t('botDetail.stat.liquidation')}
-          value={
-            bot.liquidation_price != null && bot.liquidation_price > 0
-              ? formatUsd(bot.liquidation_price)
-              : '—'
+          label={
+            liquidation.estimated
+              ? t('botDetail.stat.liquidationEst')
+              : t('botDetail.stat.liquidation')
+          }
+          value={liquidation.price != null ? formatUsd(liquidation.price) : '—'}
+          delta={
+            liquidation.estimated && liquidation.price != null ? (
+              <span className="text-2xs leading-4 text-text-muted">
+                {liquidation.source === 'entry'
+                  ? t('botDetail.stat.liquidationEstEntry')
+                  : t('botDetail.stat.liquidationEstHint')}
+              </span>
+            ) : undefined
           }
         />
       </div>
 
       {/* E.1: Liquidation distance gauge */}
-      {bot.liquidation_price != null && bot.liquidation_price > 0 && markPrice != null && (
+      {liquidation.price != null && markPrice != null && (
         <LiqGauge
           markPrice={markPrice}
-          liqPrice={bot.liquidation_price}
+          liqPrice={liquidation.price}
           direction={bot.direction}
         />
       )}
@@ -596,7 +650,7 @@ export function BotDetailPage() {
               levels={levels}
               markPrice={markPrice}
               entryPrice={avgEntry}
-              liquidationPrice={bot.liquidation_price}
+              liquidationPrice={liquidation.price}
               recentlyFilled={recentlyFilled}
             />
           )}
@@ -609,7 +663,7 @@ export function BotDetailPage() {
           <h3 className="text-sm font-semibold text-text-primary mb-4">
             {t('botDetail.equityCurve')}
           </h3>
-          <BotDetailEquityCurve botId={botId} />
+          <BotDetailEquityCurve botId={botId} positive={totalPnl > 0} />
         </Card>
         <StatsPanel bot={bot} />
       </div>
@@ -658,6 +712,11 @@ export function BotDetailPage() {
         onClose={() => setRangeDialogOpen(false)}
         bot={bot}
         markPrice={markPrice}
+      />
+      <UpdateInvestmentDialog
+        open={amountDialogOpen}
+        onClose={() => setAmountDialogOpen(false)}
+        bot={bot}
       />
     </div>
   );
@@ -1629,7 +1688,7 @@ function FundingTable({
   );
 }
 
-function BotDetailEquityCurve({ botId }: { botId: number }) {
+function BotDetailEquityCurve({ botId, positive }: { botId: number; positive: boolean }) {
   const t = useT();
   const snapshotsQuery = useQuery({
     queryKey: ['snapshots', botId],
@@ -1643,7 +1702,7 @@ function BotDetailEquityCurve({ botId }: { botId: number }) {
       </div>
     );
   }
-  return <EquityCurve snapshots={snapshotsQuery.data?.snapshots ?? []} />;
+  return <EquityCurve snapshots={snapshotsQuery.data?.snapshots ?? []} positive={positive} />;
 }
 
 function ChartLegend() {
@@ -1656,6 +1715,7 @@ function ChartLegend() {
       <LegendDot color="bg-border-strong" label={t('botDetail.chart.legendFilled')} />
       <LegendDot color="bg-warning" label={t('botDetail.chart.legendPending')} />
       <LegendDot color="bg-primary" label={t('botDetail.chart.legendMark')} />
+      <LegendDot color="bg-danger" label={t('botDetail.chart.legendLiq')} />
     </div>
   );
 }

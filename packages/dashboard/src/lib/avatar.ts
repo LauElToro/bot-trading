@@ -12,7 +12,11 @@ export function communityAvatarUrl(
   hasAvatar: boolean,
   cacheKey?: number | null,
 ): string | null {
-  if (!hasAvatar) return null;
-  const version = cacheKey ? `?v=${cacheKey}` : '';
-  return `${BASE_URL}/api/v2/community/avatar/${userId}${version}`;
+  if (!hasAvatar || !userId) return null;
+  // Path segment, not a query string. Some edges cache or drop `?v=` and
+  // then the header/profile URL 404s while the bare podium URL still works.
+  const version = typeof cacheKey === 'number' && Number.isFinite(cacheKey) && cacheKey > 0
+    ? `/${Math.trunc(cacheKey)}`
+    : '';
+  return `${BASE_URL}/api/v2/community/avatar/${encodeURIComponent(userId)}${version}`;
 }

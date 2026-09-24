@@ -1,5 +1,6 @@
 import nodemailer, { type Transporter } from 'nodemailer';
 import { childLogger } from '../server/logger.js';
+import { composeEmail, type OutboundEmail } from './layout.js';
 
 const log = childLogger('mailer');
 
@@ -42,12 +43,13 @@ function getTransporter(): Transporter {
   return transporter;
 }
 
-async function sendMail(params: {
-  to: string;
-  subject: string;
-  text: string;
-  html: string;
-}): Promise<boolean> {
+function dashboardUrl(): string | null {
+  const base = process.env.APP_BASE_URL?.trim().replace(/\/$/, '');
+  if (!base || !/^https?:\/\//.test(base)) return null;
+  return `${base}/dashboard/`;
+}
+
+async function sendMail(params: OutboundEmail & { to: string }): Promise<boolean> {
   if (!isMailerConfigured()) {
     log.warn({ to: params.to, subject: params.subject }, 'SMTP not configured — email not sent');
     return false;
@@ -67,6 +69,44 @@ export interface PasswordResetEmail {
   to: string;
   resetUrl: string;
   expiresInMinutes: number;
+  lang?: 'es' | 'en';
+}
+
+export function buildPasswordResetEmail(params: PasswordResetEmail): OutboundEmail {
+  const spanish = params.lang !== 'en';
+  const minutes = String(params.expiresInMinutes);
+  if (spanish) {
+    return composeEmail(`Toro — restablecer la contraseña de ${params.to}`, {
+      lang: 'es',
+      preheader: `El enlace vence en ${minutes} minutos y sirve una sola vez.`,
+      heading: 'Restablecé la contraseña de tu cuenta',
+      paragraphs: [
+        `Recibimos una solicitud para elegir una contraseña nueva en la cuenta ${params.to}.`,
+        `El enlace de abajo vence en ${minutes} minutos y se puede usar una sola vez. Si pedís otro restablecimiento, este deja de servir.`,
+        'Si no pediste el cambio, no abras el enlace. La contraseña actual sigue igual y nadie entra a la cuenta con este correo.',
+      ],
+      cta: { label: 'Elegir una contraseña nueva', href: params.resetUrl },
+      notes: [
+        'Si el botón no abre, copiá la dirección completa y pegala en el navegador. La dirección incluye un token de un solo uso: no la reenvíes.',
+      ],
+      footer: `Toro envió este correo a ${params.to} porque alguien pidió restablecer la contraseña de esa cuenta.`,
+    });
+  }
+  return composeEmail(`Toro — reset the password for ${params.to}`, {
+    lang: 'en',
+    preheader: `The link expires in ${minutes} minutes and works only once.`,
+    heading: 'Reset the password for your account',
+    paragraphs: [
+      `We received a request to choose a new password for ${params.to}.`,
+      `The link below expires in ${minutes} minutes and can be used only once. A newer reset request cancels this one.`,
+      'If you did not ask for this, do not open the link. Your current password stays the same.',
+    ],
+    cta: { label: 'Choose a new password', href: params.resetUrl },
+    notes: [
+      'If the button does not open, copy the full address into your browser. It contains a single-use token: do not forward it.',
+    ],
+    footer: `Toro sent this email to ${params.to} because someone asked to reset the password for that account.`,
+  });
 }
 
 export async function sendPasswordResetEmail(params: PasswordResetEmail): Promise<void> {
@@ -77,36 +117,111 @@ export async function sendPasswordResetEmail(params: PasswordResetEmail): Promis
     );
     return;
   }
-  await sendMail({
-    to: params.to,
-    subject: 'Reset your Toro password',
-    text:
-      `We received a request to reset the password for this account.\n\n` +
-      `Click the link below to choose a new password:\n${params.resetUrl}\n\n` +
-      `This link expires in ${params.expiresInMinutes} minutes and can be used only once. ` +
-      `If you did not request this, you can ignore this email — your password will stay the same.`,
-    html:
-      `<p>We received a request to reset the password for this account.</p>` +
-      `<p><a href="${params.resetUrl}">Reset your password</a></p>` +
-      `<p>This link expires in ${params.expiresInMinutes} minutes and can be used only once. ` +
-      `If you did not request this, you can ignore this email — your password will stay the same.</p>`,
+  const mail = buildPasswordResetEmail(params);
+  await sendMail({ to: params.to, ...mail });
+}
+
+export function buildWelcomeEmail(to: string, lang: 'es' | 'en' = 'es'): OutboundEmail {
+  const dashboard = dashboardUrl();
+  if (lang === 'en') {
+    return composeEmail('Toro — your account is active', {
+      lang: 'en',
+      preheader: 'Next step: connect GRVT with Trade permission only, then create a paused bot.',
+      heading: 'Your Toro account is active',
+      paragraphs: [
+        `${to} is verified. Toro does not hold funds. Orders are sent to your own GRVT account.`,
+        'Connect API keys with the Trade permission only. Do not enable Withdraw or Transfer.',
+        'Create a bot and leave it paused until you have checked the instrument, the price range, the leverage, and the margin. Nothing is sent to the exchange until you start that bot.',
+      ],
+      ...(dashboard ? { cta: { label: 'Open the dashboard', href: dashboard } } : {}),
+      footer: `Toro sent this email to ${to} because that address finished signup.`,
+    });
+  }
+  return composeEmail('Toro — tu cuenta ya está activa', {
+    lang: 'es',
+    preheader: 'Siguiente paso: conectá GRVT solo con permiso Trade y creá un bot en pausa.',
+    heading: 'Tu cuenta de Toro está activa',
+    paragraphs: [
+      `${to} quedó verificado. Toro no custodia fondos. Las órdenes salen de tu cuenta de GRVT.`,
+      'Conectá las API keys solo con permiso Trade. No actives Withdraw ni Transfer.',
+      'Creá un bot y dejalo en pausa hasta revisar el instrumento, el rango de precios, el apalancamiento y el margen. No se envía nada al exchange hasta que inicies ese bot.',
+    ],
+    ...(dashboard ? { cta: { label: 'Abrir el dashboard', href: dashboard } } : {}),
+    footer: `Toro envió este correo a ${to} porque esa dirección terminó el registro.`,
   });
 }
 
-export async function sendWelcomeEmail(to: string): Promise<void> {
-  const base = process.env.APP_BASE_URL?.replace(/\/$/, '') || '';
-  const dashboardUrl = base ? `${base}/dashboard/` : '/dashboard/';
-  await sendMail({
-    to,
-    subject: 'Bienvenido a Toro',
-    text:
-      `Tu cuenta está lista.\n\n` +
-      `Siguiente paso: conectá tus credenciales de GRVT (solo permiso Trade) y creá un bot en pausa.\n` +
-      `${dashboardUrl}\n`,
-    html:
-      `<p>Tu cuenta está lista.</p>` +
-      `<p>Siguiente paso: conectá tus credenciales de GRVT (solo permiso Trade) y creá un bot en pausa.</p>` +
-      `<p><a href="${dashboardUrl}">Abrir el dashboard</a></p>`,
+export async function sendWelcomeEmail(to: string, lang: 'es' | 'en' = 'es'): Promise<void> {
+  await sendMail({ to, ...buildWelcomeEmail(to, lang) });
+}
+
+export function buildAuthenticationCodeEmail(params: {
+  to: string;
+  code: string;
+  purpose: 'signup' | 'login';
+  lang: 'es' | 'en';
+  expiresInMinutes: number;
+}): OutboundEmail {
+  const minutes = String(params.expiresInMinutes);
+  const signup = params.purpose === 'signup';
+  if (params.lang === 'es') {
+    const heading = signup ? 'Código para verificar tu email' : 'Código para iniciar sesión';
+    const subject = signup
+      ? `Toro — código para verificar ${params.to}`
+      : `Toro — código para entrar con ${params.to}`;
+    return composeEmail(subject, {
+      lang: 'es',
+      preheader: `Código de 6 dígitos. Vence en ${minutes} minutos y sirve una sola vez.`,
+      heading,
+      paragraphs: signup
+        ? [
+            `Recibimos una solicitud para crear una cuenta de Toro con ${params.to}.`,
+            `Ingresá este código de 6 dígitos en la pantalla de verificación. Vence en ${minutes} minutos y solo se puede usar una vez.`,
+            'Toro no te va a pedir este código por otro canal. No lo reenvíes.',
+          ]
+        : [
+            `Alguien intentó iniciar sesión en Toro con ${params.to}.`,
+            `Si fuiste vos, ingresá este código de 6 dígitos. Vence en ${minutes} minutos y solo se puede usar una vez.`,
+            'Si no fuiste vos, ignorá este correo. La contraseña no cambia y la sesión no se abre.',
+          ],
+      code: params.code,
+      facts: [
+        { label: 'Cuenta', value: params.to },
+        { label: 'Uso del código', value: signup ? 'Verificar el email y crear la cuenta' : 'Iniciar sesión' },
+        { label: 'Vigencia', value: `${minutes} minutos desde este envío`, accent: true },
+        { label: 'Usos', value: 'Uno solo' },
+      ],
+      footer: `Toro envió este correo a ${params.to} para confirmar esa dirección.`,
+    });
+  }
+
+  const heading = signup ? 'Code to verify your email' : 'Code to sign in';
+  const subject = signup
+    ? `Toro — code to verify ${params.to}`
+    : `Toro — code to sign in as ${params.to}`;
+  return composeEmail(subject, {
+    lang: 'en',
+    preheader: `6-digit code. It expires in ${minutes} minutes and works only once.`,
+    heading,
+    paragraphs: signup
+      ? [
+          `We received a request to create a Toro account for ${params.to}.`,
+          `Enter this 6-digit code on the verification screen. It expires in ${minutes} minutes and can be used only once.`,
+          'Toro will not ask you for this code on any other channel. Do not forward it.',
+        ]
+      : [
+          `Someone tried to sign in to Toro as ${params.to}.`,
+          `If that was you, enter this 6-digit code. It expires in ${minutes} minutes and can be used only once.`,
+          'If that was not you, ignore this email. Your password does not change and no session is opened.',
+        ],
+    code: params.code,
+    facts: [
+      { label: 'Account', value: params.to },
+      { label: 'Code is for', value: signup ? 'Verifying the email and creating the account' : 'Signing in' },
+      { label: 'Expires', value: `${minutes} minutes after this email was sent`, accent: true },
+      { label: 'Uses', value: 'Once' },
+    ],
+    footer: `Toro sent this email to ${params.to} to confirm that address.`,
   });
 }
 
@@ -117,58 +232,9 @@ export async function sendAuthenticationCode(params: {
   lang: 'es' | 'en';
   expiresInMinutes: number;
 }): Promise<boolean> {
-  const isSpanish = params.lang === 'es';
-  const action = isSpanish
-    ? params.purpose === 'signup'
-      ? 'verificar tu email'
-      : 'iniciar sesión'
-    : params.purpose === 'signup'
-      ? 'verify your email'
-      : 'sign in';
-  const subject = isSpanish
-    ? `${params.code} es tu código de Toro`
-    : `${params.code} is your Toro code`;
-  const intro = isSpanish
-    ? `Usá este código para ${action}.`
-    : `Use this code to ${action}.`;
-  const expiry = isSpanish
-    ? `Vence en ${params.expiresInMinutes} minutos y solo puede usarse una vez.`
-    : `It expires in ${params.expiresInMinutes} minutes and can only be used once.`;
-  const warning = isSpanish
-    ? 'Si no solicitaste este código, ignorá este email.'
-    : 'If you did not request this code, ignore this email.';
-
-  return sendMail({
-    to: params.to,
-    subject,
-    text: `${intro}\n\n${params.code}\n\n${expiry}\n${warning}`,
-    html:
-      `<div style="background:#0c0a08;padding:32px;font-family:Arial,sans-serif;color:#f6f0e6">` +
-      `<div style="max-width:520px;margin:auto">` +
-      `<p style="color:#e8b84a;font-size:12px;letter-spacing:2px;margin:0 0 20px">TORO · SECURITY</p>` +
-      `<h1 style="font-size:22px;margin:0 0 12px">${intro}</h1>` +
-      `<div style="margin:28px 0;padding:20px;border:1px solid #4a3f32;background:#161310;` +
-      `font-family:monospace;font-size:36px;font-weight:700;letter-spacing:10px;text-align:center;color:#e8b84a">` +
-      `${params.code}</div>` +
-      `<p style="color:#d4c6b0;font-size:14px;line-height:1.6">${expiry}</p>` +
-      `<p style="color:#a89478;font-size:12px;line-height:1.6">${warning}</p>` +
-      `</div></div>`,
-  });
+  return sendMail({ to: params.to, ...buildAuthenticationCodeEmail(params) });
 }
 
-export async function sendNotificationEmail(params: {
-  to: string;
-  subject: string;
-  body: string;
-}): Promise<boolean> {
-  const escaped = params.body
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
-  return sendMail({
-    to: params.to,
-    subject: params.subject,
-    text: params.body,
-    html: `<pre style="font-family:ui-sans-serif,system-ui,sans-serif;white-space:pre-wrap;line-height:1.45">${escaped}</pre>`,
-  });
+export async function sendNotificationEmail(params: OutboundEmail & { to: string }): Promise<boolean> {
+  return sendMail(params);
 }

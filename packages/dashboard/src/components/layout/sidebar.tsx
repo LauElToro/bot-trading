@@ -6,6 +6,7 @@ import { UserAvatar } from '@/components/user-avatar';
 import { communityAvatarUrl, publicDisplayName } from '@/lib/avatar';
 import { useAuth } from '@/lib/auth-context';
 import { GRVT_REFERRAL_URL } from '@/lib/brand';
+import { ProfileTags } from '@/components/profile-tags';
 import { useT } from '@/i18n';
 import { APP_NAV } from './nav-items';
 
@@ -33,15 +34,15 @@ export function Sidebar({
       />
       <aside
         className={cn(
-          'fixed inset-y-0 left-0 z-50 flex w-[17.5rem] flex-col text-white',
-          'bg-[#101114] lg:static lg:z-auto',
+          'fixed inset-y-0 left-0 z-50 flex h-dvh w-[16.5rem] shrink-0 flex-col overflow-y-auto text-white',
+          'bg-[#101114] lg:static lg:z-auto lg:h-full',
           'transition-transform duration-200 lg:translate-x-0',
           open ? 'translate-x-0' : '-translate-x-full',
         )}
       >
         <div className="pointer-events-none absolute inset-0 opacity-[.09] [background-image:linear-gradient(#dc2626_1px,transparent_1px),linear-gradient(90deg,#dc2626_1px,transparent_1px)] [background-size:52px_52px]" />
 
-        <div className="relative flex items-center justify-between px-5 py-5">
+        <div className="relative flex items-center justify-between px-4 py-3">
           <Link to="/dashboard" onClick={onClose} aria-label="Toro dashboard">
             <BrandMark compact inverted />
           </Link>
@@ -55,11 +56,11 @@ export function Sidebar({
           </button>
         </div>
 
-        <p className="relative px-5 pb-3 font-mono text-[10px] tracking-[.22em] text-[#f87171]">
+        <p className="relative px-4 pb-2 font-mono text-[10px] tracking-[.22em] text-[#f87171]">
           {t('nav.controlCenter')}
         </p>
 
-        <nav aria-label="Main navigation" className="relative flex-1 overflow-y-auto border-t border-white/10">
+        <nav aria-label="Main navigation" className="relative border-t border-white/10">
           {APP_NAV.map((item, index) => (
             <NavLink
               key={item.to}
@@ -68,7 +69,7 @@ export function Sidebar({
               onClick={onClose}
               className={({ isActive }) =>
                 cn(
-                  'group flex items-center gap-3 border-b border-white/10 px-5 py-3.5 transition-colors',
+                  'group flex items-center gap-2.5 border-b border-white/10 px-4 py-2.5 transition-colors',
                   isActive ? 'bg-white/[.06] text-white' : 'text-[#a1a1aa] hover:bg-white/[.04] hover:text-white',
                 )
               }
@@ -85,13 +86,13 @@ export function Sidebar({
                   </span>
                   <span
                     className={cn(
-                      'grid size-8 shrink-0 place-items-center border transition-colors',
+                      'grid size-7 shrink-0 place-items-center border transition-colors',
                       isActive
                         ? 'border-[#f87171] bg-[#f87171]/15 text-[#f87171] shadow-[0_0_16px_rgba(248,113,113,.35)]'
                         : 'border-white/10 bg-white/[.03] text-[#d4d4d8] group-hover:border-white/25',
                     )}
                   >
-                    <item.icon className="size-4" strokeWidth={1.75} />
+                    <item.icon className="size-3.5" strokeWidth={1.75} />
                   </span>
                   <span className="text-sm font-medium">{t(item.labelKey)}</span>
                 </>
@@ -100,12 +101,12 @@ export function Sidebar({
           ))}
         </nav>
 
-        <div className="relative border-t border-white/10 px-5 py-4">
+        <div className="relative border-t border-white/10 px-4 py-3">
           {user && (
             <Link
-              to="/dashboard/settings"
+              to="/dashboard/perfil"
               onClick={onClose}
-              className="flex items-center gap-3 py-1"
+              className="flex items-center gap-3 py-0.5"
             >
               <UserAvatar
                 name={user.displayName}
@@ -114,8 +115,12 @@ export function Sidebar({
                 size="sm"
               />
               <div className="min-w-0">
-                <div className="truncate text-sm font-medium text-white">{displayName}</div>
-                <div className="truncate font-mono text-[10px] text-[#71717a]">{user.email}</div>
+                <ProfileTags
+                  name={displayName}
+                  tags={user.tags}
+                  className="text-sm font-medium text-white"
+                  tagClassName="text-[11px]"
+                />
               </div>
             </Link>
           )}
@@ -123,7 +128,7 @@ export function Sidebar({
             href={GRVT_REFERRAL_URL}
             target="_blank"
             rel="noopener noreferrer"
-            className="mt-4 block font-mono text-[10px] tracking-wide text-[#f87171] hover:underline"
+            className="mt-2 block font-mono text-[10px] tracking-wide text-[#f87171] hover:underline"
           >
             {t('nav.referral')}
           </a>

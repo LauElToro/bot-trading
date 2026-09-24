@@ -85,7 +85,7 @@ export function LoginPage() {
     setPending(true);
     setOtpError('');
     try {
-      await verifyOtp(challenge.id, code, email);
+      await verifyOtp(challenge.id, code, email, lang);
       navigate('/dashboard', { replace: true });
     } catch {
       setOtpError(copy.otpError);

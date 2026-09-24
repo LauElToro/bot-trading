@@ -1,12 +1,13 @@
 // Grid Trading Engine - Fase 3
 // Lógica completa de grid trading con safeguards para dinero real
 
-import { grvtClient, type GRVTClient, getInstrumentSpec } from '../api/client.js';
+import { grvtClient, readExchangeLiquidationPrice, type GRVTClient, getInstrumentSpec } from '../api/client.js';
 import { getGrvtClientForBot, invalidateGrvtClient } from '../api/grvt-client-factory.js';
 import { db } from '../database/db.js';
 import type { GridBot, GridLevel, OrderRecord } from '../database/db.js';
 import { childLogger } from '../server/logger.js';
 import { EventEmitter } from 'events';
+import { pnlFromExchangePosition } from './exchange-pnl.js';
 
 const log = childLogger('engine');
 
@@ -27,6 +28,8 @@ export interface GridConfig {
   // H.5: route this bot through a specific sub-account. NULL/undefined
   // = use the user's default credentials in grvt_credentials.
   grvtSubAccountId?: number | null;
+  // Source grid bot when this one was created from a published strategy.
+  copiedFromBotId?: number | null;
 }
 
 export interface GridCalculation {
@@ -386,6 +389,27 @@ export function wouldCloseAtLossWithoutStopLoss(
 }
 
 /**
+ * Short inventory still available for buy orders. Resting buys count
+ * against it, so a short grid can cover but cannot cross into a long.
+ * Flat or long positions have no room.
+ */
+export function shortCoverRoom(positionSize: number, reservedBuyQty = 0): number {
+  if (!(positionSize < 0)) return 0;
+  return Math.max(0, Math.abs(positionSize) - Math.max(0, reservedBuyQty));
+}
+
+export function buyWouldFlipShort(
+  direction: 'long' | 'short',
+  positionSize: number,
+  side: 'buy' | 'sell',
+  quantity: number,
+  reservedBuyQty = 0,
+): boolean {
+  if (direction !== 'short' || side !== 'buy') return false;
+  return quantity > shortCoverRoom(positionSize, reservedBuyQty) + 1e-8;
+}
+
+/**
  * Grid Trading Engine
  * Maneja la lógica completa de grid trading con safeguards
  */
@@ -567,6 +591,7 @@ export class GridEngine extends EventEmitter {
       // bumps investment_usdt + quantity_per_level atomically.
       this.compoundCheckInterval = setInterval(() => {
         this.track('checkCompoundRebalance', () => this.checkCompoundRebalance());
+        this.track('followStreaks', () => db.tickFollowStreaks());
       }, 60 * 60 * 1000);
       log.info('🔄 Compound rebalance enabled (per-bot opt-in, checks every 1h)');
 
@@ -574,6 +599,10 @@ export class GridEngine extends EventEmitter {
       this.dcaCheckInterval = setInterval(() => {
         this.track('checkDcaBuys', () => this.checkDcaBuys());
       }, 60 * 60 * 1000);
+
+      setTimeout(() => {
+        this.track('followStreaks', () => db.tickFollowStreaks());
+      }, 15_000);
 
       // Daily snapshots: boot snapshot in 10s, then every 24h at midnight UTC
       const now = new Date();
@@ -742,6 +771,7 @@ export class GridEngine extends EventEmitter {
         virtual_enabled: virtualEnabled ? 1 : 0,
         active_window_size: activeWindowSize,
         grvt_sub_account_id: config.grvtSubAccountId ?? null,
+        copied_from_bot_id: config.copiedFromBotId ?? null,
         params_json: JSON.stringify({
           spacing: calculation.spacing,
           quantityPerGrid: calculation.quantityPerGrid,
@@ -1051,10 +1081,42 @@ export class GridEngine extends EventEmitter {
     }
   }
 
+  /** Bots currently inside closeBot, so a copy chain cannot loop. */
+  private closingBots = new Set<number>();
+
   /**
-   * Cerrar bot (cancelar órdenes + cerrar posición)
+   * Cerrar bot (cancelar órdenes + cerrar posición).
+   * Después cierra las copias activas. Devuelve cuántas copias se cerraron.
    */
-  async closeBot(botId: number): Promise<void> {
+  async closeBot(botId: number): Promise<number> {
+    if (this.closingBots.has(botId)) return 0;
+    this.closingBots.add(botId);
+    try {
+      await this.closeBotOnce(botId);
+      return await this.closeActiveCopies(botId);
+    } finally {
+      this.closingBots.delete(botId);
+    }
+  }
+
+  private async closeActiveCopies(botId: number): Promise<number> {
+    const copyIds = await db.listActiveCopyIds(botId);
+    let closed = 0;
+    for (const copyId of copyIds) {
+      try {
+        closed += 1 + await this.closeBot(copyId);
+        log.info(`🛑 Copia ${copyId} cerrada junto con el bot ${botId}`);
+      } catch (err) {
+        log.error(
+          { botId, copyId, err: (err as Error).message },
+          'no se pudo cerrar una copia',
+        );
+      }
+    }
+    return closed;
+  }
+
+  private async closeBotOnce(botId: number): Promise<void> {
     try {
       const bot = await db.getBot(botId);
       if (!bot) throw new Error(`Bot ${botId} no encontrado`);
@@ -1645,11 +1707,6 @@ export class GridEngine extends EventEmitter {
     const activeBots = await db.getBotsByStatus('running');
     for (const bot of activeBots) {
       try {
-        const exists = await db.hasSnapshotForDate(bot.id, today);
-        if (exists) {
-          log.info(`📸 Snapshot ya existe para bot ${bot.id} fecha ${today}`);
-          continue;
-        }
         const instance = this.bots.get(bot.id);
         if (!instance) continue;
         await instance.createDailySnapshots();
@@ -1832,6 +1889,84 @@ export class GridEngine extends EventEmitter {
     } finally {
       this.bumpInProgress.delete(botId);
     }
+  }
+
+  /**
+   * Change the capital assigned to a bot and the canonical per-level qty.
+   * Does not cancel live orders: those keep their size until they fill
+   * and the monitor replaces them from quantity_per_level. Unplaced
+   * levels (paused bots, virtuals) are resized immediately so the next
+   * Start uses the new amount.
+   */
+  async updateBotInvestment(
+    botId: number,
+    investmentUsdt: number,
+  ): Promise<{
+    investmentUsdt: number;
+    quantityPerLevel: number;
+    previousInvestment: number;
+    resizedLevels: number;
+  }> {
+    const bot = await db.getBot(botId);
+    if (!bot) throw new Error(`Bot ${botId} not found`);
+    if (bot.status === 'stopped') {
+      throw new Error('Cannot change the amount on a stopped bot. Create a new one.');
+    }
+    if (!Number.isFinite(investmentUsdt) || investmentUsdt <= 0) {
+      throw new Error('investment must be > 0');
+    }
+
+    const midPrice = (bot.lower_price + bot.upper_price) / 2;
+    const newQty = computeQtyPerLevel(
+      investmentUsdt,
+      bot.leverage,
+      bot.num_grids,
+      midPrice,
+      bot.pair,
+    );
+    const previous = bot.investment_usdt;
+    const sameInvestment = Math.abs(previous - investmentUsdt) < 0.01;
+    const sameQty = Math.abs((bot.quantity_per_level ?? 0) - newQty) < 0.0000001;
+    if (sameInvestment && sameQty) {
+      return {
+        investmentUsdt: previous,
+        quantityPerLevel: bot.quantity_per_level ?? newQty,
+        previousInvestment: previous,
+        resizedLevels: 0,
+      };
+    }
+
+    await db.updateBot(botId, {
+      investment_usdt: investmentUsdt,
+      quantity_per_level: newQty,
+    });
+    const resizedLevels = await db.resizeUnplacedLevels(botId, newQty);
+    const delta = investmentUsdt - previous;
+    if (Math.abs(delta) >= 0.01) {
+      await db.recordCashMovement({
+        bot_id: botId,
+        type: delta > 0 ? 'deposit' : 'withdrawal',
+        amount_usdt: Math.abs(delta),
+        notes: `Manual amount edit $${previous.toFixed(2)} → $${investmentUsdt.toFixed(2)}, qty ${bot.quantity_per_level ?? 0} → ${newQty}`,
+      });
+    }
+
+    const instance = this.bots.get(botId);
+    if (instance) {
+      const fresh = await db.getBot(botId);
+      if (fresh) instance.refreshBot(fresh);
+      await instance.loadGridLevels();
+    }
+
+    log.info(
+      `💵 Bot ${botId} amount $${previous.toFixed(2)} → $${investmentUsdt.toFixed(2)}, qty → ${newQty}, resized ${resizedLevels} unplaced levels`,
+    );
+    return {
+      investmentUsdt,
+      quantityPerLevel: newQty,
+      previousInvestment: previous,
+      resizedLevels,
+    };
   }
 
   /**
@@ -2176,6 +2311,8 @@ export class GridBotInstance {
   // fill_history to age out, otherwise a cancellation can be mistaken for a
   // fill and trigger a counter-order.
   private recentlyNoLossCancelled = new Map<number, number>();
+  /** Buy size already resting or placed this tick against a short. */
+  private reservedShortCover = 0;
   private injectedClient: GRVTClient | null = null;
 
   constructor(bot: GridBot, client?: GRVTClient) {
@@ -2628,6 +2765,23 @@ export class GridBotInstance {
     log.debug(`placeGridOrder INICIADO - Bot: ${this.bot.id}, Level: ${level.level_index}`);
     log.debug(`placeGridOrder - Orden: ${level.side} ${level.quantity} ${this.bot.pair} @ $${level.price}`);
 
+    if (buyWouldFlipShort(
+      this.bot.direction,
+      this.bot.position_size,
+      level.side,
+      level.quantity,
+      this.reservedShortCover,
+    )) {
+      const room = shortCoverRoom(this.bot.position_size, this.reservedShortCover);
+      log.info(
+        `🛡️ Short guard: buy ${level.quantity} @ $${level.price.toFixed(2)} skipped; cover room ${room.toFixed(4)}`
+      );
+      return;
+    }
+    if (this.bot.direction === 'short' && level.side === 'buy') {
+      this.reservedShortCover += level.quantity;
+    }
+
     const closeLimit = getNoLossCloseLimit(this.bot, level.side);
     if (wouldCloseAtLossWithoutStopLoss(this.bot, level.side, level.price)) {
       const comparison = closeLimit?.kind === 'minimum' ? 'mínimo' : 'máximo';
@@ -2796,6 +2950,82 @@ export class GridBotInstance {
    * Monitorear órdenes y ejecutar lógica de round-trip
    * ⚠️ FIX CRÍTICO: Verificar fills reales con fill_history antes de asumir fills
    */
+  /**
+   * A short bot may buy only to cover the open short. Extra buys flip it
+   * long, which is what happened on the copied ETH shorts.
+   */
+  private async enforceShortCannotGoLong(openOrders: any[], currentPrice: number): Promise<void> {
+    if (this.bot.direction !== 'short') {
+      this.reservedShortCover = 0;
+      return;
+    }
+
+    const size = this.bot.position_size;
+    if (size > 0 && currentPrice > 0) {
+      const sellQty = Math.ceil((size - 1e-9) / 0.01) * 0.01;
+      if (sellQty >= 0.01) {
+        try {
+          const sellPrice = Math.floor(currentPrice * 0.995 * 100) / 100;
+          await this.grvt.createOrder({
+            sub_account_id: process.env.GRVT_TRADING_ACCOUNT_ID || '',
+            instrument: this.bot.pair,
+            size: sellQty.toFixed(2),
+            price: sellPrice.toString(),
+            side: 'sell',
+            type: 'limit',
+            time_in_force: 'ioc',
+            metadata: `short_guard_${this.bot.id}`,
+          }, true);
+          const after = await this.grvt.getPosition(this.bot.pair);
+          this.bot.position_size = after ? parseFloat(after.size) : 0;
+          log.info(
+            `🛡️ Short bot ${this.bot.id} was long ${size.toFixed(4)}; sold ${sellQty.toFixed(2)} → ${this.bot.position_size.toFixed(4)}`
+          );
+        } catch (err) {
+          log.warn(
+            `Short bot ${this.bot.id} could not exit long ${size.toFixed(4)}: ${err instanceof Error ? err.message : err}`
+          );
+        }
+      }
+    }
+
+    const buys = openOrders
+      .map((order) => {
+        const leg = order?.legs?.[0] ?? {};
+        const buying = leg.is_buying_asset === true || leg.is_buying_asset === 'true';
+        return {
+          order,
+          buying,
+          price: parseFloat(leg.limit_price || '0'),
+          size: Math.abs(parseFloat(leg.size || '0')),
+        };
+      })
+      .filter((row) => row.buying && row.size > 0)
+      .sort((a, b) => b.price - a.price);
+
+    let used = 0;
+    const room = shortCoverRoom(this.bot.position_size, 0);
+    for (const row of buys) {
+      if (used + row.size <= room + 1e-8) {
+        used += row.size;
+        continue;
+      }
+      const orderId = row.order?.order_id;
+      if (!orderId) continue;
+      try {
+        await this.grvt.cancelOrder(orderId, this.bot.pair);
+        log.info(
+          `🛡️ Cancelled extra short-cover buy ${row.size} @ $${row.price.toFixed(2)} (room ${room.toFixed(4)})`
+        );
+      } catch (err) {
+        log.warn(
+          `Could not cancel extra buy ${orderId}: ${err instanceof Error ? err.message : err}`
+        );
+      }
+    }
+    this.reservedShortCover = used;
+  }
+
   async monitor(): Promise<void> {
     // H.8: skip monitoring while placeInitialOrders() is in flight. The
     // bootstrap places orders with a 200ms throttle over ~15s; during that
@@ -2827,8 +3057,11 @@ export class GridBotInstance {
       if (livePosition) {
         this.bot.position_size = parseFloat(livePosition.size);
         this.bot.avg_entry_price = parseFloat(livePosition.entry_price);
+        const exchangeLiq = readExchangeLiquidationPrice(livePosition);
+        if (exchangeLiq > 0) this.bot.liquidation_price = exchangeLiq;
       } else {
         this.bot.position_size = 0;
+        this.bot.liquidation_price = 0;
       }
     } catch (error) {
       log.warn(
@@ -2837,12 +3070,16 @@ export class GridBotInstance {
       );
     }
 
+    await this.enforceShortCannotGoLong(openOrders, currentPrice);
+
     // 2.5. SAFEGUARD: liquidation proximity check (C.4). Opt-in per bot.
     // Throws a SAFEGUARD:<action>: error that monitorAllBots() parses to
     // decide whether to pause or pause+close. No-op when the bot has no
     // position yet (avg_entry_price = 0) or the safeguard is disabled.
     if (this.bot.safeguard_enabled) {
-      const liq = computeLiqPriceLocal(this.bot);
+      const liq = this.bot.liquidation_price > 0
+        ? this.bot.liquidation_price
+        : computeLiqPriceLocal(this.bot);
       if (liq !== null && liq > 0) {
         const distancePct = this.bot.direction === 'long'
           ? ((currentPrice - liq) / currentPrice) * 100
@@ -3533,40 +3770,59 @@ export class GridBotInstance {
       let trendPnl = 0;
       let positionSize = 0;
       let avgEntryPrice = 0;
+      let liquidationPrice = 0;
 
+      const exchangePnl = pnlFromExchangePosition(position);
       if (position) {
-        trendPnl = parseFloat(position.unrealized_pnl);
+        trendPnl = exchangePnl.unrealized;
         positionSize = parseFloat(position.size);
         avgEntryPrice = parseFloat(position.entry_price);
+        liquidationPrice = readExchangeLiquidationPrice(position);
       }
 
-      // Recalculate grid profit every 12th tick (~60s).
-      // Flow: calculateRealGridProfit() runs FIFO on fills_archive,
-      // persists new pairs to paired_roundtrips, then we read the
-      // canonical profit from paired_roundtrips (single source of truth).
+      if (liquidationPrice !== this.bot.liquidation_price) {
+        log.info(
+          `Bot ${this.bot.id}: liquidación GRVT $${liquidationPrice > 0 ? liquidationPrice.toFixed(2) : '0'}`
+        );
+      }
+      if (liquidationPrice === 0 && position && Math.abs(parseFloat(position.size || '0')) > 1e-8) {
+        log.info(
+          { botId: this.bot.id, keys: Object.keys(position) },
+          'posición abierta sin est_liquidation_price'
+        );
+      }
+
+      // Keep pairing fills for round-trip history, but the numbers we
+      // show / email / milestone on are GRVT's position PnL. Local FIFO
+      // was missing fees, funding and partial closes — Lauty's mail said
+      // +$21.77 while GRVT showed +$28.
       this.pnlUpdateCounter++;
       if (this.pnlUpdateCounter % 12 === 1) {
         try {
-          // 1) Run FIFO to discover & persist new pairs
           await this.calculateRealGridProfit();
-          // 2) Read canonical profit from DB (gross - fees)
-          const gross = await db.sumPairedRoundtripProfit(this.bot.id);
-          const fees = await db.sumFeesForBot(this.bot.id);
-          this.bot.grid_profit_usdt = gross - fees;
         } catch (gpErr) {
-          log.info(`⚠️ Error calculating grid profit: ${gpErr}`);
+          log.info(`⚠️ Error pairing grid fills: ${gpErr}`);
         }
       }
 
-      const totalPnl = this.bot.grid_profit_usdt + trendPnl;
+      // Headline is GRVT's total. Realized is backed out so the two parts
+      // always add up to that total (the exchange fields can disagree).
+      const reportedTotal = position ? exchangePnl.total : this.bot.grid_profit_usdt + trendPnl;
+      const realizedPnl = position ? reportedTotal - trendPnl : this.bot.grid_profit_usdt;
+      const totalPnl = position ? reportedTotal : realizedPnl + trendPnl;
+      this.bot.grid_profit_usdt = realizedPnl;
+      this.bot.trend_pnl_usdt = trendPnl;
+      this.bot.total_pnl_usdt = totalPnl;
 
       await db.updateBot(this.bot.id, {
-        grid_profit_usdt: this.bot.grid_profit_usdt,
+        grid_profit_usdt: realizedPnl,
         trend_pnl_usdt: trendPnl,
         total_pnl_usdt: totalPnl,
         position_size: positionSize,
-        avg_entry_price: avgEntryPrice
+        avg_entry_price: avgEntryPrice,
+        liquidation_price: liquidationPrice,
       });
+      this.bot.liquidation_price = liquidationPrice;
 
       // H.3: Stop-loss / take-profit check (after PnL is persisted).
       // Uses the same SAFEGUARD throw pattern as C.4 — monitorAllBots()
@@ -3760,18 +4016,13 @@ export class GridBotInstance {
       if (currentBot?.id) {
         const botId: number = currentBot.id;
         try {
-          // Verificar si ya existe snapshot para hoy
-          const exists = await db.hasSnapshotForDate(botId, today as string);
-          if (exists) {
-            log.info(`📸 Snapshot ya existe para bot ${botId} fecha ${today}`);
-            return;
-          }
-          
-          // Bot equity = investment + total PnL (not account-wide balance)
+          // Equity matches the dashboard: investment + realized + unrealized.
+          // total_pnl_usdt can lag the two components the cards add up.
           const freshBot = await db.getBot(botId);
           const botInvestment = freshBot?.investment_usdt ?? 0;
-          const botTotalPnl = freshBot?.total_pnl_usdt ?? 0;
-          const equity = botInvestment + botTotalPnl;
+          const realized = freshBot?.grid_profit_usdt ?? 0;
+          const unrealized = freshBot?.trend_pnl_usdt ?? 0;
+          const equity = botInvestment + realized + unrealized;
           
           // Grid profit from paired_roundtrips (single source of truth)
           const gross = await db.sumPairedRoundtripProfit(botId);
@@ -3785,8 +4036,8 @@ export class GridBotInstance {
             date: today as string,
             equity,
             grid_profit_net: gridProfitNet,
-            trend_pnl: currentBot.trend_pnl_usdt || 0,
-            total_pnl: currentBot.total_pnl_usdt || 0,
+            trend_pnl: unrealized,
+            total_pnl: realized + unrealized,
             round_trips: roundTrips,
             eth_price: ethPrice
           });

@@ -63,8 +63,10 @@ services:
       LOG_LEVEL: "${LOG_LEVEL:-info}"
       DATABASE_URL: "${DATABASE_URL:?DATABASE_URL is required}"
       CREDENTIAL_MASTER_KEY: "${CREDENTIAL_MASTER_KEY:?CREDENTIAL_MASTER_KEY is required}"
+      AVATAR_DIR: /var/lib/toro/avatars
     volumes:
       - ./logs/bot:/app/logs
+      - avatar-data:/var/lib/toro/avatars
     ports:
       - "127.0.0.1:${BOT_PORT:-3848}:3848"
     depends_on:
@@ -166,6 +168,7 @@ services:
 
 volumes:
   postgres-data:
+  avatar-data:
   notifier-state:
   caddy-data:
   caddy-config:

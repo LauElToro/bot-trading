@@ -31,6 +31,17 @@ describe('NotifierDb', () => {
     );
   });
 
+  it('loads recent roundtrips for one bot', async () => {
+    const pool = mockPool([]);
+    const db = new NotifierDb('', pool as unknown as DbPool);
+
+    await db.getRecentRoundtrips(3, 8);
+    expect(pool.query).toHaveBeenCalledWith(
+      expect.stringContaining('WHERE pr.bot_id = $1'),
+      [3, 8],
+    );
+  });
+
   it('pings and closes the injected pool without network access', async () => {
     const pool = mockPool([{ '?column?': 1 }]);
     const db = new NotifierDb('', pool as unknown as DbPool);

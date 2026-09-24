@@ -10,6 +10,7 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
+import { useT } from '@/i18n/context';
 import { formatUsd } from '@/lib/format';
 import type { DailySnapshot } from '@/lib/api-types';
 
@@ -24,9 +25,12 @@ interface EquityCurveProps {
   snapshots?: DailySnapshot[];
   points?: EquityPoint[];
   height?: number;
+  /** When set, the line follows the live result instead of the series slope. */
+  positive?: boolean;
 }
 
-export function EquityCurve({ snapshots, points, height = 240 }: EquityCurveProps) {
+export function EquityCurve({ snapshots, points, height = 240, positive }: EquityCurveProps) {
+  const t = useT();
   // Normalize either input to chronological {date, equity}[].
   // - snapshots: newest-first, equity field is `equity_usdt` (legacy alias).
   // - points: already chronological; pass through.
@@ -50,7 +54,7 @@ export function EquityCurve({ snapshots, points, height = 240 }: EquityCurveProp
 
   const first = data[0]?.equity ?? 0;
   const last = data[data.length - 1]?.equity ?? 0;
-  const isUp = last >= first;
+  const isUp = positive ?? last >= first;
   const stroke = isUp ? 'var(--color-success)' : 'var(--color-danger)';
 
   const pctChange = first > 0 ? ((last - first) / first) * 100 : 0;
@@ -99,7 +103,7 @@ export function EquityCurve({ snapshots, points, height = 240 }: EquityCurveProp
             }}
             labelStyle={{ color: 'var(--color-text-muted)' }}
             itemStyle={{ color: 'var(--color-text-primary)' }}
-            formatter={(v: number) => [formatUsd(v), 'Equity']}
+            formatter={(v: number) => [formatUsd(v), t('overview.totalEquity')]}
           />
           <Area
             type="monotone"

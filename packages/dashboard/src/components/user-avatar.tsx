@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { cn } from '@/lib/cn';
 import { publicDisplayName } from '@/lib/avatar';
 
@@ -19,6 +20,8 @@ const SIZES = {
 export function UserAvatar({ name, email, src, size = 'md', className }: UserAvatarProps) {
   const label = publicDisplayName(name, email);
   const initial = label.slice(0, 1).toUpperCase();
+  const [brokenSrc, setBrokenSrc] = useState<string | null>(null);
+  const imageSrc = src && brokenSrc !== src ? src : null;
 
   return (
     <span
@@ -29,8 +32,13 @@ export function UserAvatar({ name, email, src, size = 'md', className }: UserAva
       )}
       aria-hidden="true"
     >
-      {src ? (
-        <img src={src} alt="" className="absolute inset-0 size-full object-cover" />
+      {imageSrc ? (
+        <img
+          src={imageSrc}
+          alt=""
+          className="absolute inset-0 size-full object-cover"
+          onError={() => setBrokenSrc(imageSrc)}
+        />
       ) : (
         initial
       )}

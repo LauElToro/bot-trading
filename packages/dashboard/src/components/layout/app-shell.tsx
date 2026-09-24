@@ -30,6 +30,7 @@ export function AppShell() {
           case 'go': navigate('/dashboard'); return;
           case 'gb': navigate('/dashboard/bots'); return;
           case 'gp': navigate('/dashboard/podio'); return;
+          case 'gf': navigate('/dashboard/perfil'); return;
           case 'gh': navigate('/dashboard/guia'); return;
           case 'gs': navigate('/dashboard/settings'); return;
           case 'nb':
@@ -69,7 +70,7 @@ export function AppShell() {
   }, [handleKeyDown]);
 
   return (
-    <div className="flex min-h-dvh bg-bg-base text-text-primary">
+    <div className="flex h-dvh overflow-hidden bg-bg-base text-text-primary">
       <a
         href="#main-content"
         className="absolute left-2 top-2 z-50 -translate-y-16 bg-primary px-3 py-2 text-xs font-semibold text-bg-base transition-transform focus-visible:translate-y-0"
@@ -77,12 +78,12 @@ export function AppShell() {
         Skip to main content
       </a>
       <Sidebar open={navOpen} onClose={() => setNavOpen(false)} />
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <Header onOpenNav={() => setNavOpen(true)} />
         <main
           id="main-content"
           tabIndex={-1}
-          className="relative flex-1 min-w-0 overflow-y-auto p-4 md:p-8 focus:outline-none"
+          className="relative min-h-0 min-w-0 flex-1 overflow-y-auto p-4 md:p-8 focus:outline-none"
         >
           <div className="pointer-events-none absolute inset-0 opacity-[.035] [background-image:linear-gradient(var(--color-text-primary)_1px,transparent_1px),linear-gradient(90deg,var(--color-text-primary)_1px,transparent_1px)] [background-size:48px_48px]" />
           <div className="relative mx-auto w-full max-w-6xl">

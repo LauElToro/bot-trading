@@ -28,6 +28,9 @@ import {
   type Trade,
   type ValidateBotInput,
   type ValidateBotResult,
+  type NotificationPrefs,
+  type PublicTraderProfile,
+  type TraderProfile,
 } from './api-types';
 
 const BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/+$/, '');
@@ -193,7 +196,8 @@ export const api = {
   getHealth: () => request<HealthV2>('/health'),
 
   getBots: () => request<{ bots: BotSummary[] }>('/bots'),
-  getBot: (id: number) => request<{ bot: BotSummary; publishedId?: number | null }>(`/bots/${id}`),
+  getBot: (id: number) =>
+    request<{ bot: BotSummary; publishedId?: number | null; activeCopyCount?: number }>(`/bots/${id}`),
   getGridState: (id: number) => request<GridState>(`/bots/${id}/grid-state`),
 
   getInstruments: () => request<{ instruments: unknown[] }>('/instruments'),
@@ -230,6 +234,29 @@ export const api = {
   // H.7: portfolio-level aggregates across all user bots.
   getPortfolioSummary: () =>
     request<PortfolioSummary>('/portfolio-summary'),
+
+  getTraderProfile: () =>
+    request<TraderProfile>('/profile'),
+
+  getPublicTrader: (userId: string) =>
+    request<PublicTraderProfile>(`/community/traders/${userId}`),
+
+  followTrader: (userId: string) =>
+    request<import('./api-types').FollowState>(`/community/traders/${userId}/follow`, { method: 'POST' }),
+
+  unfollowTrader: (userId: string) =>
+    request<import('./api-types').FollowState>(`/community/traders/${userId}/follow`, { method: 'DELETE' }),
+
+  setFollowCopy: (userId: string, body: { autoCopy: boolean; investmentUsdt?: number }) =>
+    request<import('./api-types').FollowState>(`/community/traders/${userId}/follow`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    }),
+
+  searchTraders: (query: string) =>
+    request<{ traders: import('./api-types').TraderSearchHit[] }>(
+      `/community/search?q=${encodeURIComponent(query)}`,
+    ),
 
   getPortfolioEquityCurve: (days = 90) =>
     request<{ points: PortfolioEquityPoint[] }>(
@@ -302,7 +329,7 @@ export const api = {
   // as an active bot. Differs from pauseBot which only cancels orders
   // and leaves the position open for later resume.
   closeBot: (id: number) =>
-    request<{ id: number; status: 'stopped' }>(`/bots/${id}/close`, {
+    request<{ id: number; status: 'stopped'; closedCopies?: number }>(`/bots/${id}/close`, {
       method: 'POST',
     }),
 
@@ -324,6 +351,18 @@ export const api = {
   // preview. Refuses on safety violations; short-circuits on no-op.
   // Atomic: per-bot mutex held for the duration so monitor() cannot
   // race against the mutation.
+  updateBotInvestment: (id: number, investmentUsdt: number) =>
+    request<{
+      id: number;
+      investmentUsdt: number;
+      quantityPerLevel: number;
+      previousInvestment: number;
+      resizedLevels: number;
+    }>(`/bots/${id}/investment`, {
+      method: 'POST',
+      body: JSON.stringify({ investmentUsdt }),
+    }),
+
   updateBotRange: (
     id: number,
     body: { lowerPrice: number; upperPrice: number }
@@ -396,8 +435,8 @@ export const api = {
   login: (email: string, password: string, lang: 'es' | 'en' = 'en') =>
     publicRequest<OtpChallenge>('/auth/login', { email, password, lang }),
 
-  verifyOtp: (challengeId: string, code: string) =>
-    publicRequest<AuthSession>('/auth/verify-otp', { challengeId, code })
+  verifyOtp: (challengeId: string, code: string, lang: 'es' | 'en' = 'es') =>
+    publicRequest<AuthSession>('/auth/verify-otp', { challengeId, code, lang })
       .then(persistSession),
 
   resendOtp: (challengeId: string, lang: 'es' | 'en' = 'en') =>
@@ -423,8 +462,8 @@ export const api = {
       refreshToken: storedRefresh || refreshToken || '',
     }).catch(() => ({ ok: true as const })),
 
-  forgotPassword: (email: string) =>
-    publicRequest<{ ok: true }>('/auth/forgot-password', { email }),
+  forgotPassword: (email: string, lang: 'es' | 'en' = 'en') =>
+    publicRequest<{ ok: true }>('/auth/forgot-password', { email, lang }),
 
   resetPassword: (token: string, newPassword: string) =>
     publicRequest<{ ok: true }>('/auth/reset-password', {
@@ -444,13 +483,26 @@ export const api = {
       bio?: string | null;
       hasAvatar?: boolean;
       avatarUpdatedAt?: number | null;
+      tags?: string[];
+      notifications?: NotificationPrefs;
     }>('/auth/me'),
 
-  updateProfile: (body: { displayName: string; bio: string }) =>
-    request<{ ok: true; displayName: string | null; bio: string | null }>('/auth/profile', {
+  updateNotifications: (body: NotificationPrefs) =>
+    request<{ ok: true; notifications: NotificationPrefs }>('/auth/notifications', {
       method: 'PATCH',
       body: JSON.stringify(body),
     }),
+
+  updateProfile: (body: { displayName: string; bio: string; tags?: string[] }) =>
+    request<{ ok: true; displayName: string | null; bio: string | null; tags: string[] }>('/auth/profile', {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    }),
+
+  suggestTag: (name?: string) =>
+    request<{ tag: string }>(
+      `/auth/tag-suggestion${name ? `?name=${encodeURIComponent(name)}` : ''}`,
+    ),
 
   uploadAvatar: (mimeType: string, data: string) =>
     request<{ ok: true; hasAvatar: true; avatarUpdatedAt: number }>('/auth/avatar', {

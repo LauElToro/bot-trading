@@ -2,6 +2,11 @@
 
 import pg, { type QueryResultRow } from 'pg';
 import { childLogger } from './logger.js';
+import {
+  DEFAULT_NOTIFICATION_PREFS,
+  clampProfitMilestonePct,
+  type NotificationPrefs,
+} from './policy.js';
 
 const { Pool, types } = pg;
 const log = childLogger('db');
@@ -31,7 +36,11 @@ export interface BotRow {
   grid_profit_usdt: number;
   trend_pnl_usdt: number;
   avg_entry_price: number;
+  position_size?: number;
   liquidation_price: number;
+  lower_price?: number;
+  upper_price?: number;
+  num_grids?: number;
   last_error?: string | null;
   // F.1: per-bot alert config (nullable — uses global defaults when null)
   alert_drawdown_pct?: number | null;
@@ -100,7 +109,8 @@ export class NotifierDb {
     return this.all<BotRow>(
       `SELECT id, pair, status, direction, leverage, investment_usdt,
               total_pnl_usdt, grid_profit_usdt, trend_pnl_usdt,
-              avg_entry_price, liquidation_price,
+              avg_entry_price, position_size, liquidation_price,
+              lower_price, upper_price, num_grids,
               alert_drawdown_pct, alert_fill_batch, alert_liq_proximity_pct,
               user_id
        FROM grid_bots`
@@ -141,6 +151,19 @@ export class NotifierDb {
     );
   }
 
+  getRecentRoundtrips(botId: number, limit: number = 8): Promise<RoundtripRow[]> {
+    return this.all<RoundtripRow>(
+      `SELECT pr.id, pr.bot_id, b.user_id, pr.buy_price, pr.sell_price,
+              pr.size, pr.profit, pr.created_at
+       FROM paired_roundtrips pr
+       LEFT JOIN grid_bots b ON b.id = pr.bot_id
+       WHERE pr.bot_id = $1
+       ORDER BY pr.id DESC
+       LIMIT $2`,
+      [botId, limit]
+    );
+  }
+
   /**
    * Latest snapshot for the daily summary.
    */
@@ -174,6 +197,41 @@ export class NotifierDb {
       [userId]
     );
     return row?.email ?? null;
+  }
+
+  async getUserNotifyPrefs(userId: string): Promise<NotificationPrefs> {
+    const d = DEFAULT_NOTIFICATION_PREFS;
+    try {
+      const row = await this.get<{
+        notify_emails_enabled: number | null;
+        notify_profit: number | null;
+        notify_drawdown: number | null;
+        notify_liq: number | null;
+        notify_status: number | null;
+        notify_daily: number | null;
+        notify_profit_pct: number | null;
+      }>(
+        `SELECT notify_emails_enabled, notify_profit, notify_drawdown,
+                notify_liq, notify_status, notify_daily, notify_profit_pct
+         FROM users WHERE id = $1`,
+        [userId]
+      );
+      if (!row) return { ...d };
+      const flag = (value: number | null | undefined, fallback: boolean) =>
+        value == null ? fallback : value === 1;
+      return {
+        emailsEnabled: flag(row.notify_emails_enabled, d.emailsEnabled),
+        profitMilestones: flag(row.notify_profit, d.profitMilestones),
+        drawdown: flag(row.notify_drawdown, d.drawdown),
+        liqProximity: flag(row.notify_liq, d.liqProximity),
+        statusChanges: flag(row.notify_status, d.statusChanges),
+        dailySummary: flag(row.notify_daily, d.dailySummary),
+        profitMilestonePct: clampProfitMilestonePct(row.notify_profit_pct ?? d.profitMilestonePct),
+      };
+    } catch (err) {
+      log.warn({ err: (err as Error).message, userId }, 'notify prefs unavailable, using defaults');
+      return { ...d };
+    }
   }
 
   close(): Promise<void> {

@@ -167,9 +167,9 @@ export function FieldSource({
     <button
       type="button"
       onClick={() => onOpen(step)}
-      className="mt-1 text-left text-[11px] leading-5 text-text-muted hover:text-primary"
+      className="mt-1 text-left text-[11px] leading-5 text-text-muted hover:text-ok"
     >
-      <span className="font-mono text-[10px] tracking-wider text-primary">
+      <span className="font-mono text-[10px] tracking-wider text-ok">
         {tStep(step)}
       </span>{' '}
       {children}

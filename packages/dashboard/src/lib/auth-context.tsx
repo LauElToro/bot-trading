@@ -21,6 +21,7 @@ import {
   setAuthToken,
   type OtpChallenge,
 } from './api-client';
+import { DEFAULT_NOTIFICATION_PREFS, type NotificationPrefs } from './api-types';
 import { wsClient } from './ws-client';
 
 export interface AuthUser {
@@ -34,6 +35,8 @@ export interface AuthUser {
   bio: string | null;
   hasAvatar: boolean;
   avatarUpdatedAt: number | null;
+  tags: string[];
+  notifications: NotificationPrefs;
 }
 
 interface AuthCtx {
@@ -52,10 +55,11 @@ interface AuthCtx {
     tosLang?: 'es' | 'en',
     referralCode?: string
   ) => Promise<OtpChallenge>;
-  verifyOtp: (challengeId: string, code: string, email: string) => Promise<void>;
+  verifyOtp: (challengeId: string, code: string, email: string, lang?: 'es' | 'en') => Promise<void>;
   resendOtp: (challengeId: string, lang?: 'es' | 'en') => Promise<void>;
   logout: () => void;
   refreshMe: () => Promise<void>;
+  patchUser: (patch: Partial<Pick<AuthUser, 'displayName' | 'bio' | 'tags'>>) => void;
 }
 
 const AuthContext = createContext<AuthCtx | null>(null);
@@ -82,6 +86,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null);
   }, []);
 
+  const patchUser = useCallback((patch: Partial<Pick<AuthUser, 'displayName' | 'bio' | 'tags'>>) => {
+    setUser((current) => (current ? { ...current, ...patch } : current));
+  }, []);
+
   const refreshMe = useCallback(async () => {
     try {
       const data = await api.getMe();
@@ -96,6 +104,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         bio: data.bio ?? null,
         hasAvatar: data.hasAvatar === true,
         avatarUpdatedAt: data.avatarUpdatedAt ?? null,
+        tags: data.tags ?? [],
+        notifications: data.notifications ?? DEFAULT_NOTIFICATION_PREFS,
       });
     } catch {
       logout();
@@ -129,23 +139,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const verifyOtp = useCallback(async (
     challengeId: string,
     code: string,
-    email: string
+    _email: string,
+    lang: 'es' | 'en' = 'es',
   ) => {
-    const res = await api.verifyOtp(challengeId, code);
+    const res = await api.verifyOtp(challengeId, code, lang);
     applyAccessToken(res.token);
-    setUser({
-      id: res.userId,
-      email,
-      isAdmin: res.isAdmin,
-      hasGrvtCreds: res.hasGrvtCreds,
-      createdAt: 0,
-      lastLoginAt: null,
-      displayName: null,
-      bio: null,
-      hasAvatar: false,
-      avatarUpdatedAt: null,
-    });
-  }, [applyAccessToken]);
+    // The OTP response has no profile. A local stub with hasAvatar=false
+    // stayed on screen for the whole session, so header, settings and the
+    // own profile hid the photo while the podium (community API) showed it.
+    await refreshMe();
+  }, [applyAccessToken, refreshMe]);
 
   const resendOtp = useCallback(async (
     challengeId: string,
@@ -164,18 +167,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   ) => {
     const res = await api.loginWithGoogle(idToken, extras);
     applyAccessToken(res.token);
-    setUser({
-      id: res.userId,
-      email: '',
-      isAdmin: res.isAdmin,
-      hasGrvtCreds: res.hasGrvtCreds,
-      createdAt: extras.acceptedTerms ? Date.now() : 0,
-      lastLoginAt: null,
-      displayName: null,
-      bio: null,
-      hasAvatar: false,
-      avatarUpdatedAt: null,
-    });
     await refreshMe();
   }, [applyAccessToken, refreshMe]);
 
@@ -200,6 +191,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       resendOtp,
       logout,
       refreshMe,
+      patchUser,
     }),
     [
       user,
@@ -212,6 +204,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       resendOtp,
       logout,
       refreshMe,
+      patchUser,
     ]
   );
 

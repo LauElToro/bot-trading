@@ -38,6 +38,8 @@ export interface Position {
   entry_price: string;
   mark_price: string;
   unrealized_pnl: string;
+  realized_pnl?: string;
+  total_pnl?: string;
   side: 'buy' | 'sell';
   leverage: string;
   liquidation_price: string;
@@ -394,6 +396,15 @@ export class GRVTClient {
     };
   }
 
+  /** Full GRVT account summary, including positions. Used for account PnL. */
+  async getAccountSummary(): Promise<Record<string, unknown>> {
+    await rateLimiter.waitIfNeeded();
+    const data = await this.authedRequest(`${TRADING_URL}/account_summary`, {
+      sub_account_id: this.tradingAccountId,
+    });
+    return data && typeof data === 'object' ? data as Record<string, unknown> : {};
+  }
+
   /**
    * Obtener todas las posiciones
    */
@@ -731,25 +742,26 @@ export class GRVTClient {
   }
 
   /**
-   * Calcular precio de liquidación aproximado
+   * Precio de liquidación de GRVT (`est_liquidation_price`).
+   * En cross margin no sale de entry × leverage: depende del margen
+   * de toda la subcuenta, así que la aproximación local queda lejos.
    */
   async calculateLiquidationPrice(instrument: string, leverage: number): Promise<string> {
     try {
       const position = await this.getPosition(instrument);
       if (!position) return '0';
 
+      const fromExchange = readExchangeLiquidationPrice(position);
+      if (fromExchange > 0) return fromExchange.toFixed(2);
+
       const entryPrice = parseFloat(position.entry_price);
-      const maintenanceMarginRate = 0.005; // 0.5% típico
-      
-      // Aproximación: liq_price = entry_price * (1 ± (1/leverage - maintenance_margin))
+      const maintenanceMarginRate = 0.005;
       const factor = 1 / leverage - maintenanceMarginRate;
-      
-      let liquidationPrice: number;
-      if (position.side === 'buy') {
-        liquidationPrice = entryPrice * (1 - factor);
-      } else {
-        liquidationPrice = entryPrice * (1 + factor);
-      }
+      if (!(entryPrice > 0) || factor <= 0) return '0';
+
+      const liquidationPrice = position.side === 'buy'
+        ? entryPrice * (1 - factor)
+        : entryPrice * (1 + factor);
 
       return Math.max(0, liquidationPrice).toFixed(2);
 
@@ -758,6 +770,20 @@ export class GRVTClient {
       return '0';
     }
   }
+}
+
+/** GRVT's own liquidation price for an open position. 0 when absent. */
+export function readExchangeLiquidationPrice(position: {
+  size?: string;
+  est_liquidation_price?: string;
+  liquidation_price?: string;
+} | null | undefined): number {
+  if (!position) return 0;
+  const size = parseFloat(position.size ?? '');
+  if (!Number.isFinite(size) || Math.abs(size) < 1e-8) return 0;
+  const raw = position.est_liquidation_price ?? position.liquidation_price;
+  const price = parseFloat(raw ?? '');
+  return Number.isFinite(price) && price > 0 ? price : 0;
 }
 
 // Instancia singleton del client

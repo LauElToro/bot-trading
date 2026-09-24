@@ -88,6 +88,9 @@ COPY --chown=grvtbot:grvtbot packages/bot/package.json ./package.json
 # build without rebuilding the whole image).
 COPY --from=dashboard-builder --chown=grvtbot:grvtbot /build/packages/dashboard/dist ./dashboard-dist
 
+RUN mkdir -p /var/lib/toro/avatars && chown -R grvtbot:grvtbot /var/lib/toro
+ENV AVATAR_DIR=/var/lib/toro/avatars
+
 USER grvtbot
 EXPOSE 3848
 

@@ -24,6 +24,15 @@ export interface NotifierState {
   // Last error we surfaced, to avoid spamming on the same one. Keyed
   // per user so cross-tenant alerts don't suppress each other.
   lastErrorHashByUser: Record<string, string | null>;
+  // Last 5%-style profit bucket notified per bot (e.g. 4 = +20% when step=5).
+  lastProfitMilestoneByBot: Record<string, number>;
+  // Drawdown email already sent for the current episode, per user.
+  // Cleared only after equity recovers above the threshold.
+  drawdownLatchByUser: Record<string, boolean>;
+  /** YYYY-MM-DD of the last drawdown email per user. */
+  drawdownSentOnByUser: Record<string, string>;
+  // Liquidation email already sent while that bot stays inside the band.
+  liqLatchByBot: Record<string, boolean>;
   lastRoundtripId?: number;
   equityHwm?: number;
   lastErrorHash?: string | null;
@@ -79,6 +88,10 @@ export class StateStore {
       equityHwmByUser: {},
       lastSummaryDate: null,
       lastErrorHashByUser: {},
+      lastProfitMilestoneByBot: {},
+      drawdownLatchByUser: {},
+      drawdownSentOnByUser: {},
+      liqLatchByBot: {},
     };
   }
 
@@ -94,6 +107,18 @@ export class StateStore {
     }
     if (parsed.lastErrorHashByUser) {
       state.lastErrorHashByUser = parsed.lastErrorHashByUser;
+    }
+    if (parsed.lastProfitMilestoneByBot) {
+      state.lastProfitMilestoneByBot = parsed.lastProfitMilestoneByBot;
+    }
+    if (parsed.drawdownLatchByUser) {
+      state.drawdownLatchByUser = parsed.drawdownLatchByUser;
+    }
+    if (parsed.drawdownSentOnByUser) {
+      state.drawdownSentOnByUser = parsed.drawdownSentOnByUser;
+    }
+    if (parsed.liqLatchByBot) {
+      state.liqLatchByBot = parsed.liqLatchByBot;
     }
     return state;
   }

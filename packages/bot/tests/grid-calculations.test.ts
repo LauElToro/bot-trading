@@ -83,7 +83,9 @@ vi.mock('../src/server/logger.js', () => ({
 
 import {
   computeLiqPriceLocal,
+  buyWouldFlipShort,
   getNoLossCloseLimit,
+  shortCoverRoom,
   wouldCloseAtLossWithoutStopLoss,
   GridEngine,
 } from '../src/bot/grid-engine.js';
@@ -184,6 +186,17 @@ describe('no-loss close guard', () => {
 
   it('does not interfere when an explicit stop loss is configured', () => {
     expect(wouldCloseAtLossWithoutStopLoss({ ...longBot, sl_pct: 5 }, 'sell', 2500)).toBe(false);
+  });
+
+  it('does not let a short bot buy itself into a long', () => {
+    expect(shortCoverRoom(-0.04, 0.03)).toBeCloseTo(0.01);
+    expect(shortCoverRoom(-0.04, 0.04)).toBe(0);
+    expect(shortCoverRoom(0.01, 0)).toBe(0);
+    expect(buyWouldFlipShort('short', -0.04, 'buy', 0.02, 0.03)).toBe(true);
+    expect(buyWouldFlipShort('short', -0.04, 'buy', 0.01, 0.03)).toBe(false);
+    expect(buyWouldFlipShort('short', 0.01, 'buy', 0.01)).toBe(true);
+    expect(buyWouldFlipShort('short', -0.2, 'sell', 0.05)).toBe(false);
+    expect(buyWouldFlipShort('long', 0.2, 'buy', 0.05)).toBe(false);
   });
 
   it('does not block opening orders when there is no position', () => {

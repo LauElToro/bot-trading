@@ -5,10 +5,11 @@ import { api } from '@/lib/api-client';
 import { BrandMark } from '@/components/brand-mark';
 import { Button } from '@/components/primitives/button';
 import { Input } from '@/components/primitives/input';
-import { LanguageToggle, useT } from '@/i18n';
+import { LanguageToggle, useLang, useT } from '@/i18n';
 
 export function ForgotPasswordPage() {
   const t = useT();
+  const { lang } = useLang();
   const [email, setEmail] = useState('');
   const [pending, setPending] = useState(false);
   const [submitted, setSubmitted] = useState(false);
@@ -18,7 +19,7 @@ export function ForgotPasswordPage() {
     if (!email) return;
     setPending(true);
     try {
-      await api.forgotPassword(email);
+      await api.forgotPassword(email, lang);
       setSubmitted(true);
     } catch (err) {
       toast.error((err as Error).message || t('auth.forgotPassword.failed'));

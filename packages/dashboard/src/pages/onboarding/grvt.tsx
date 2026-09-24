@@ -100,45 +100,16 @@ export function GrvtOnboardingPage() {
           </div>
 
           <form onSubmit={handleSave} className="grid gap-4 px-5 py-5 md:grid-cols-2">
-            <FieldWrap active={step === 0}>
-              <Input
-                label={t('onboarding.grvt.accountId')}
-                value={accountId}
-                onChange={(e) => setAccountId(e.target.value)}
-                disabled={pending}
-                autoComplete="off"
-                onFocus={() => setStep(0)}
-              />
-              <FieldSource step={0} onOpen={setStep}>
-                {t('onboarding.grvt.findAccountId')}
-              </FieldSource>
-            </FieldWrap>
-            <FieldWrap active={step === 0}>
-              <Input
-                label={t('onboarding.grvt.tradingAddress')}
-                value={tradingAddress}
-                onChange={(e) => setTradingAddress(e.target.value)}
-                disabled={pending}
-                autoComplete="off"
-                onFocus={() => setStep(0)}
-                error={
-                  tradingAddress && !/^0x[0-9a-fA-F]{40}$/.test(tradingAddress)
-                    ? t('onboarding.grvt.tradingAddressError')
-                    : undefined
-                }
-              />
-              <FieldSource step={0} onOpen={setStep}>
-                {t('onboarding.grvt.findAddress')}
-              </FieldSource>
-            </FieldWrap>
             <FieldWrap active={step === 2}>
               <Input
+                positive
                 label={t('onboarding.grvt.apiKey')}
                 value={apiKey}
                 onChange={(e) => setApiKey(e.target.value)}
                 disabled={pending}
                 autoComplete="off"
                 onFocus={() => setStep(2)}
+                className={apiKey.length > 0 ? 'border-ok' : undefined}
               />
               <FieldSource step={2} onOpen={setStep}>
                 {t('onboarding.grvt.findApiKey')}
@@ -146,6 +117,7 @@ export function GrvtOnboardingPage() {
             </FieldWrap>
             <FieldWrap active={step === 2}>
               <Input
+                positive
                 label={t('onboarding.grvt.apiSecret')}
                 type="password"
                 value={apiSecret}
@@ -153,7 +125,8 @@ export function GrvtOnboardingPage() {
                 disabled={pending}
                 autoComplete="off"
                 onFocus={() => setStep(2)}
-                error={
+                className={/^0x[0-9a-fA-F]{64}$/.test(apiSecret) ? 'border-ok' : undefined}
+                helper={
                   apiSecret && !/^0x[0-9a-fA-F]{64}$/.test(apiSecret)
                     ? t('onboarding.grvt.apiSecretError')
                     : undefined
@@ -163,9 +136,46 @@ export function GrvtOnboardingPage() {
                 {t('onboarding.grvt.findSecret')}
               </FieldSource>
             </FieldWrap>
+            <FieldWrap active={step === 0}>
+              <Input
+                positive
+                label={t('onboarding.grvt.accountId')}
+                value={accountId}
+                onChange={(e) => setAccountId(e.target.value)}
+                disabled={pending}
+                autoComplete="off"
+                onFocus={() => setStep(0)}
+                className={accountId.length > 0 ? 'border-ok' : undefined}
+              />
+              <FieldSource step={0} onOpen={setStep}>
+                {t('onboarding.grvt.findAccountId')}
+              </FieldSource>
+            </FieldWrap>
+            <FieldWrap active={step === 0}>
+              <Input
+                positive
+                label={t('onboarding.grvt.tradingAddress')}
+                value={tradingAddress}
+                onChange={(e) => setTradingAddress(e.target.value)}
+                disabled={pending}
+                autoComplete="off"
+                onFocus={() => setStep(0)}
+                className={/^0x[0-9a-fA-F]{40}$/.test(tradingAddress) ? 'border-ok' : undefined}
+                helper={
+                  tradingAddress && !/^0x[0-9a-fA-F]{40}$/.test(tradingAddress)
+                    ? t('onboarding.grvt.tradingAddressError')
+                    : undefined
+                }
+              />
+              <FieldSource step={0} onOpen={setStep}>
+                {t('onboarding.grvt.findAddress')}
+              </FieldSource>
+            </FieldWrap>
             <FieldWrap active={step === 0} className="md:col-span-2">
               <Input
+                positive
                 label={t('onboarding.grvt.subAccountId')}
+                className={subAccountId.length > 0 ? 'border-ok' : undefined}
                 value={subAccountId}
                 onChange={(e) => setSubAccountId(e.target.value)}
                 disabled={pending}
@@ -209,7 +219,7 @@ function FieldWrap({
       className={[
         className,
         active
-          ? 'border border-primary/40 bg-primary-soft/40 px-3 py-3'
+          ? 'border border-ok/45 bg-ok-soft px-3 py-3'
           : 'border border-transparent px-3 py-3',
       ]
         .filter(Boolean)

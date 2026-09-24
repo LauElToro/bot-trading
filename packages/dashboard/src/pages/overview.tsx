@@ -12,6 +12,7 @@ import { ArrowRight, BookOpen, Plus, Trophy } from 'lucide-react';
 import { api } from '@/lib/api-client';
 import type { WizardPreset } from '@/lib/api-types';
 import { formatPercent, formatPnl, formatUsd, formatUsdCompact } from '@/lib/format';
+import { reconcilePnl } from '@/lib/pnl';
 import { communityAvatarUrl } from '@/lib/avatar';
 import { PageHeader } from '@/components/page-header';
 import { UserAvatar } from '@/components/user-avatar';
@@ -21,6 +22,7 @@ import { Button } from '@/components/primitives/button';
 import { Card } from '@/components/primitives/card';
 import { BotCard } from '@/components/bot-card';
 import { EquityCurve } from '@/components/charts/equity-curve';
+import { formatPublicHandle, ProfileTags } from '@/components/profile-tags';
 import { useT } from '@/i18n';
 
 // Lazy: only loaded when the user clicks "New bot" — keeps the wizard's
@@ -114,8 +116,9 @@ export function OverviewPage() {
   // so the strip never blanks during the first paint.
   const summary = summaryQuery.data;
   const fallbackInvested = bots.reduce((s, b) => s + b.investment_usdt, 0);
-  const fallbackRealized = bots.reduce((s, b) => s + b.grid_profit_usdt, 0);
-  const fallbackUnrealized = bots.reduce((s, b) => s + b.trend_pnl_usdt, 0);
+  const fallbackParts = bots.map((b) => reconcilePnl(b.grid_profit_usdt, b.trend_pnl_usdt, b.total_pnl_usdt));
+  const fallbackRealized = fallbackParts.reduce((s, b) => s + b.realized, 0);
+  const fallbackUnrealized = fallbackParts.reduce((s, b) => s + b.unrealized, 0);
   const fallbackPnl = fallbackRealized + fallbackUnrealized;
   const fallbackEquity = fallbackInvested + fallbackPnl;
   const fallbackPct = fallbackInvested > 0 ? (fallbackPnl / fallbackInvested) * 100 : 0;
@@ -191,17 +194,26 @@ export function OverviewPage() {
           <div className="grid gap-px bg-border-subtle sm:grid-cols-3">
             {leaders.slice(0, 3).map((bot) => (
               <div key={bot.id} className="bg-bg-base p-4">
-                <div className="flex items-center gap-2">
+                <Link
+                  to={`/dashboard/perfil/${bot.author.id}`}
+                  aria-label={t('community.openProfile', { name: formatPublicHandle(bot.author.name, bot.author.tags) })}
+                  className="flex items-center gap-2 hover:text-primary"
+                >
                   <UserAvatar
                     name={bot.author.name}
-                    src={communityAvatarUrl(bot.author.id, bot.author.hasAvatar)}
+                    src={communityAvatarUrl(bot.author.id, bot.author.hasAvatar, bot.author.avatarUpdatedAt)}
                     size="sm"
                   />
                   <div className="min-w-0">
-                    <div className="truncate text-xs font-semibold">{bot.author.name}</div>
+                    <ProfileTags
+                      name={bot.author.name}
+                      tags={bot.author.tags}
+                      className="text-xs font-semibold"
+                      tagClassName="text-[10px]"
+                    />
                     <div className="truncate font-mono text-[10px] text-text-muted">{bot.pair}</div>
                   </div>
-                </div>
+                </Link>
                 <div className={`mt-3 font-mono text-lg ${bot.pnlPct >= 0 ? 'text-success' : 'text-danger'}`}>
                   {formatPercent(bot.pnlPct)}
                 </div>
@@ -267,7 +279,7 @@ export function OverviewPage() {
             <h2 className="text-sm font-semibold text-text-secondary uppercase tracking-wider mb-3">
               {t('overview.portfolioEquityDays', { days: 90 })}
             </h2>
-            <EquityCurve points={curveQuery.data?.points ?? []} height={220} />
+            <EquityCurve points={curveQuery.data?.points ?? []} height={220} positive={totalPnl > 0} />
           </Card>
           <Card>
             <h2 className="text-sm font-semibold text-text-secondary uppercase tracking-wider mb-3">
@@ -291,7 +303,7 @@ export function OverviewPage() {
           <button
             type="button"
             onClick={() => setWizardOpen(true)}
-            className="border border-dashed border-border-default hover:border-primary hover:bg-primary-soft/30 transition-colors p-5 min-h-[280px] flex flex-col items-center justify-center gap-3 text-text-muted hover:text-primary"
+            className="flex h-full min-h-[280px] flex-col items-center justify-center gap-3 border border-dashed border-border-default p-5 text-text-muted transition-colors hover:border-primary hover:bg-primary-soft/30 hover:text-primary"
           >
             <div className="size-12 rounded-full bg-bg-elevated flex items-center justify-center">
               <Plus className="size-6" />

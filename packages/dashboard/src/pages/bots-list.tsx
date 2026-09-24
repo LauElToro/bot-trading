@@ -93,7 +93,7 @@ export function BotsListPage() {
         <button
           type="button"
           onClick={() => setWizardOpen(true)}
-          className="border border-dashed border-border-default hover:border-primary hover:bg-primary-soft/30 transition-colors p-5 min-h-[280px] flex flex-col items-center justify-center gap-3 text-text-muted hover:text-primary"
+          className="flex h-full min-h-[280px] flex-col items-center justify-center gap-3 border border-dashed border-border-default p-5 text-text-muted transition-colors hover:border-primary hover:bg-primary-soft/30 hover:text-primary"
         >
           <div className="size-12 rounded-full bg-bg-elevated flex items-center justify-center">
             <Plus className="size-6" />

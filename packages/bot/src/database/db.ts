@@ -1,4 +1,5 @@
 import { isUserId, newUserId, type UserId } from '../auth/user-id.js';
+import { tickOperationalStreaks } from '../server/follows.js';
 import { PostgresExecutor, type RunResult } from './postgres.js';
 
 export interface GridBot {
@@ -65,6 +66,9 @@ export interface GridBot {
   // default credentials in grvt_credentials. Non-null routes the
   // engine through that specific sub-account's encrypted creds.
   grvt_sub_account_id?: number | null;
+  // Set when this bot was created from a published strategy. Closing the
+  // source also closes these copies.
+  copied_from_bot_id?: number | null;
 }
 
 export interface GridLevel {
@@ -154,6 +158,10 @@ export class GridBotDB {
     this.dbRun = (sql, ...params) => this.db.run(sql, args(params));
     this.dbGet = (sql, ...params) => this.db.get(sql, args(params));
     this.dbAll = (sql, ...params) => this.db.all(sql, args(params));
+  }
+
+  async tickFollowStreaks(now?: Date): Promise<number> {
+    return tickOperationalStreaks(this.db, now);
   }
 
   /** Validate the external connection and apply pending migrations. */
@@ -332,9 +340,13 @@ export class GridBotDB {
       // application-layer guards (delete blocked when bots reference)
       // keep referential integrity.
       'grvt_sub_account_id INTEGER',
+      'copied_from_bot_id INTEGER',
     ]) {
       try { await this.dbRun(`ALTER TABLE grid_bots ADD COLUMN ${col}`); } catch (e) { /* exists */ }
     }
+    try {
+      await this.dbRun(`CREATE INDEX IF NOT EXISTS idx_grid_bots_copied_from ON grid_bots(copied_from_bot_id)`);
+    } catch { /* exists */ }
 
     // H.8: Add `state` column to grid_levels ('active' | 'virtual' | 'filled')
     try { await this.dbRun(`ALTER TABLE grid_levels ADD COLUMN state TEXT DEFAULT 'active'`); } catch (e) { /* exists */ }
@@ -920,6 +932,7 @@ export class GridBotDB {
       params.virtual_enabled ?? 0,
       params.active_window_size ?? null,
       params.grvt_sub_account_id ?? null,
+      params.copied_from_bot_id ?? null,
     ];
     const sql = `
       INSERT INTO grid_bots (
@@ -928,8 +941,9 @@ export class GridBotDB {
         investment_usdt, original_investment_usdt, quantity_per_level,
         grid_profit_usdt, trend_pnl_usdt, total_pnl_usdt,
         status, position_size, avg_entry_price, liquidation_price, params_json,
-        virtual_enabled, active_window_size, grvt_sub_account_id
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        virtual_enabled, active_window_size, grvt_sub_account_id,
+        copied_from_bot_id
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `;
 
     return this.db.transaction(async (tx) => {
@@ -1072,6 +1086,23 @@ export class GridBotDB {
       WHERE bot_id = ? 
       ORDER BY level_index
     `, [botId]);
+  }
+
+  /**
+   * Resize levels that are not sitting on a live GRVT order. Paused bots
+   * and virtual levels pick up the new size on the next placement. Levels
+   * with a real order_id keep their size until that order fills and the
+   * monitor replaces it from quantity_per_level.
+   */
+  async resizeUnplacedLevels(botId: number, quantity: number): Promise<number> {
+    const result = await this.dbRun(`
+      UPDATE grid_levels
+      SET quantity = ?
+      WHERE bot_id = ?
+        AND is_filled = 0
+        AND (order_id IS NULL OR order_id = '' OR order_id = '0x00' OR order_id = 'price_based_detection')
+    `, [quantity, botId]);
+    return result.changes ?? 0;
   }
 
   /**
@@ -1426,7 +1457,7 @@ export class GridBotDB {
    *
    * Multi-bot: caller MUST provide bot_id and instrument so the row can
    * be filtered correctly. v0 attribution is by instrument lookup
-   * (one running bot per instrument per sub-account).
+   * (one running bot per instrument, direction, and sub-account).
    */
   async insertFillArchive(params: {
     fill_id: string;
@@ -1717,6 +1748,18 @@ export class GridBotDB {
     return (result.changes ?? 0) > 0;
   }
 
+  /** Running or paused bots created by copying this one. */
+  async listActiveCopyIds(botId: number): Promise<number[]> {
+    const rows = await this.dbAll(
+      `SELECT id FROM grid_bots
+       WHERE copied_from_bot_id = ?
+         AND status IN ('running', 'paused')
+       ORDER BY id`,
+      [botId],
+    ) as Array<{ id: number }>;
+    return rows.map((row) => row.id);
+  }
+
   /** Count paired roundtrips for a specific bot. */
   async countPairedRoundtrips(botId: number): Promise<number> {
     const row = await this.dbGet(
@@ -1824,6 +1867,13 @@ export class GridBotDB {
     avatar_pathname?: string | null;
     avatar_updated_at?: number | null;
     bio?: string | null;
+    notify_emails_enabled?: number | null;
+    notify_profit?: number | null;
+    notify_drawdown?: number | null;
+    notify_liq?: number | null;
+    notify_status?: number | null;
+    notify_daily?: number | null;
+    notify_profit_pct?: number | null;
   } | null> {
     return await this.dbGet(`SELECT * FROM users WHERE id = ?`, [id]);
   }
@@ -1835,6 +1885,41 @@ export class GridBotDB {
     await this.dbRun(
       `UPDATE users SET display_name = ?, bio = ? WHERE id = ?`,
       [patch.display_name, patch.bio, userId],
+    );
+  }
+
+  async updateUserNotificationPrefs(
+    userId: UserId,
+    patch: {
+      emailsEnabled: boolean;
+      profitMilestones: boolean;
+      drawdown: boolean;
+      liqProximity: boolean;
+      statusChanges: boolean;
+      dailySummary: boolean;
+      profitMilestonePct: number;
+    },
+  ): Promise<void> {
+    await this.dbRun(
+      `UPDATE users SET
+        notify_emails_enabled = ?,
+        notify_profit = ?,
+        notify_drawdown = ?,
+        notify_liq = ?,
+        notify_status = ?,
+        notify_daily = ?,
+        notify_profit_pct = ?
+       WHERE id = ?`,
+      [
+        patch.emailsEnabled ? 1 : 0,
+        patch.profitMilestones ? 1 : 0,
+        patch.drawdown ? 1 : 0,
+        patch.liqProximity ? 1 : 0,
+        patch.statusChanges ? 1 : 0,
+        patch.dailySummary ? 1 : 0,
+        patch.profitMilestonePct,
+        userId,
+      ],
     );
   }
 

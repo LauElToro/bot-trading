@@ -67,7 +67,7 @@ const COPY = {
       {
         n: '03',
         title: 'Cada fill activa el siguiente',
-        body: 'Una compra ejecutada prepara una venta; una venta prepara una compra. Dashboard y WebSocket muestran posición, PnL, fills y equity.',
+        body: 'Una compra ejecutada prepara una venta; una venta prepara una compra. Dashboard y WebSocket muestran posición, PnL, fills y capital operativo.',
       },
     ],
     controlEyebrow: 'CONTROL ANTES QUE AUTOMATIZACIÓN',
@@ -90,7 +90,7 @@ const COPY = {
     dashboardBody:
       'Configurá, validá, ejecutá y monitoreá desde el mismo flujo. Las confirmaciones indican exactamente qué órdenes o posiciones se modificarán.',
     snapshot: {
-      equity: 'Equity',
+      equity: 'Capital operativo',
       pnl: 'PnL total',
       trades: 'Round trips',
       status: 'CORRIENDO',

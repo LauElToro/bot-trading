@@ -39,9 +39,16 @@ function makeMockDb() {
       // C.9: duplicate check
       if (sql.includes('COUNT(*)') && sql.includes('grid_bots') && sql.includes('status')) {
         const pair = params[1];
-        const active = (rows['bots'] ?? []).filter(
-          (b: any) => b.pair === pair && (b.status === 'running' || b.status === 'paused')
-        );
+        const direction = sql.includes('direction = ?') || sql.includes('direction <>') ? params[2] : undefined;
+        const active = (rows['bots'] ?? []).filter((b: any) => {
+          if (b.pair !== pair) return false;
+          if (b.status !== 'running' && b.status !== 'paused') return false;
+          if (sql.includes('direction <>')) {
+            return b.status === 'running' && b.direction && b.direction !== direction;
+          }
+          if (direction && b.direction && b.direction !== direction) return false;
+          return true;
+        });
         return [{ c: active.length }];
       }
       // GET /bots
@@ -53,10 +60,17 @@ function makeMockDb() {
     async get(sql: string, params: any[] = []) {
       // C.9: duplicate instrument check (has "pair = ?" in the SQL)
       if (sql.includes('COUNT(*)') && sql.includes('pair')) {
-        const pair = params[1]; // [userId, pair]
-        const active = (rows['bots'] ?? []).filter(
-          (b: any) => b.pair === pair && (b.status === 'running' || b.status === 'paused')
-        );
+        const pair = params[1];
+        const direction = sql.includes('direction = ?') || sql.includes('direction <>') ? params[2] : undefined;
+        const active = (rows['bots'] ?? []).filter((b: any) => {
+          if (b.pair !== pair) return false;
+          if (b.status !== 'running' && b.status !== 'paused') return false;
+          if (sql.includes('direction <>')) {
+            return b.status === 'running' && !!b.direction && b.direction !== direction;
+          }
+          if (direction && b.direction && b.direction !== direction) return false;
+          return true;
+        });
         return { c: active.length };
       }
       // Health: running bots count (no "pair" in the SQL)
@@ -244,6 +258,60 @@ describe('POST /api/v2/bots — C.9 duplicate instrument guard', () => {
       });
 
     expect(res.status).toBe(201);
+  });
+
+  it('allows the opposite direction on the same pair', async () => {
+    const { app, db } = createTestApp();
+    db._addBot({
+      id: 1,
+      user_id: TEST_OPERATOR_USER_ID,
+      pair: 'ETH_USDT_Perp',
+      status: 'paused',
+      direction: 'long',
+    });
+
+    const res = await request(app)
+      .post('/api/v2/bots')
+      .set('X-Api-Key', API_KEY)
+      .send({
+        pair: 'ETH_USDT_Perp',
+        direction: 'short',
+        lower_price: 1800,
+        upper_price: 2400,
+        num_grids: 10,
+        investment_usdt: 500,
+        leverage: 2,
+      });
+
+    expect(res.status).toBe(201);
+  });
+
+  it('still rejects a second bot with the same direction', async () => {
+    const { app, db } = createTestApp();
+    db._addBot({
+      id: 1,
+      user_id: TEST_OPERATOR_USER_ID,
+      pair: 'ETH_USDT_Perp',
+      status: 'running',
+      direction: 'long',
+    });
+
+    const res = await request(app)
+      .post('/api/v2/bots')
+      .set('X-Api-Key', API_KEY)
+      .send({
+        pair: 'ETH_USDT_Perp',
+        direction: 'long',
+        lower_price: 1800,
+        upper_price: 2400,
+        num_grids: 10,
+        investment_usdt: 500,
+        leverage: 2,
+      });
+
+    expect(res.status).toBe(409);
+    expect(res.body.error).toBe('duplicate_instrument');
+    expect(res.body.issues[0].code).toBe('duplicate_direction');
   });
 });
 

@@ -29,6 +29,9 @@ describe('StateStore (D.7)', () => {
     expect(state.lastBotStatus).toEqual({});
     expect(state.lastSummaryDate).toBeNull();
     expect(state.lastErrorHashByUser).toEqual({});
+    expect(state.drawdownLatchByUser).toEqual({});
+    expect(state.drawdownSentOnByUser).toEqual({});
+    expect(state.liqLatchByBot).toEqual({});
   });
 
   it('persists updates atomically (tmp + rename) and round-trips them', () => {

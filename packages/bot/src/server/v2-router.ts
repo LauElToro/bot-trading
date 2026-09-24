@@ -27,11 +27,11 @@ import {
   getGrvtClientForUser,
   getGrvtClientForBot,
 } from '../api/grvt-client-factory.js';
-import { TEST_OPERATOR_USER_ID, isUserId, type UserId } from '../auth/user-id.js';
+import { TEST_OPERATOR_USER_ID, isUserId, parseUserId, type UserId } from '../auth/user-id.js';
 import {
   deleteBlob,
   fetchBlobBytes,
-  isBlobConfigured,
+  imageContentType,
   uploadAvatar,
 } from './blob-store.js';
 import {
@@ -39,10 +39,35 @@ import {
   getPublishedBySource,
   listLeaders,
   parseMarkPrice,
+  publicName,
+  publishStoppedBots,
   recenterRange,
   recordCopy,
   toLeaderCard,
 } from './community.js';
+import { parseNotificationPatch, prefsFromUserRow } from './notification-prefs.js';
+import { livePnlSql } from './live-pnl.js';
+import { loadTraderEquityCurve, loadTraderProfile } from './profile-stats.js';
+import {
+  followUser,
+  getFollowState,
+  listFollowing,
+  mirrorLeaderStart,
+  notifyFollowers,
+  setAutoCopy,
+  unfollowUser,
+} from './follows.js';
+import { mirrorsOn } from './follow-rules.js';
+import { fetchUserAccountSlices, loadAccountPerformance } from './account-performance.js';
+import { searchTraders } from './trader-search.js';
+import {
+  collectTags,
+  ensureUserTags,
+  listUserTags,
+  setUserTags,
+  suggestUserTag,
+  TagTakenError,
+} from './profile-tags.js';
 
 declare module 'express-serve-static-core' {
   interface Request {
@@ -87,11 +112,21 @@ interface EngineOps {
     activeWindowSize?: number;
     // H.5: optional sub-account routing. NULL = use default creds.
     grvtSubAccountId?: number | null;
+    copiedFromBotId?: number | null;
   }): Promise<number>;
   startBot(botId: number): Promise<void>;
   pauseBot(botId: number): Promise<void>;
-  closeBot(botId: number): Promise<void>;
+  closeBot(botId: number): Promise<number>;
   updateBotRange(botId: number, lowerPrice: number, upperPrice: number): Promise<void>;
+  updateBotInvestment?(
+    botId: number,
+    investmentUsdt: number,
+  ): Promise<{
+    investmentUsdt: number;
+    quantityPerLevel: number;
+    previousInvestment: number;
+    resizedLevels: number;
+  }>;
   previewBotRangeUpdate(
     botId: number,
     lowerPrice: number,
@@ -103,6 +138,61 @@ interface EngineOps {
   // With subAccountId provided it only refreshes bots routed through
   // that specific sub-account.
   rebindGrvtClient?(userId: UserId, subAccountId?: number | null): Promise<void>;
+}
+
+type BotFieldIssue = {
+  field: string;
+  code: string;
+  mark?: number;
+  min?: number;
+  max?: number;
+  pair?: string;
+  direction?: string;
+};
+
+function coreBotConfigIssues(input: {
+  pair: string;
+  lower: number;
+  upper: number;
+  grids: number;
+  investment: number;
+  leverage: number;
+  virtualEnabled: boolean;
+  activeWindowSize: number;
+}): BotFieldIssue[] {
+  const issues: BotFieldIssue[] = [];
+  const maxGrids = input.virtualEnabled ? 500 : 95;
+  if (!input.pair) issues.push({ field: 'pair', code: 'pair_required' });
+  if (!Number.isFinite(input.lower) || input.lower <= 0) {
+    issues.push({ field: 'lower_price', code: 'lower_invalid' });
+  }
+  if (!Number.isFinite(input.upper) || input.upper <= 0) {
+    issues.push({ field: 'upper_price', code: 'upper_invalid' });
+  }
+  if (
+    Number.isFinite(input.lower) &&
+    Number.isFinite(input.upper) &&
+    input.lower > 0 &&
+    input.upper > 0 &&
+    input.lower >= input.upper
+  ) {
+    issues.push({ field: 'lower_price', code: 'lower_gte_upper' });
+  }
+  if (!Number.isInteger(input.grids) || input.grids < 2 || input.grids > maxGrids) {
+    issues.push({ field: 'num_grids', code: 'grids_range', min: 2, max: maxGrids });
+  }
+  if (input.virtualEnabled) {
+    if (!Number.isInteger(input.activeWindowSize) || input.activeWindowSize < 20 || input.activeWindowSize > 80) {
+      issues.push({ field: 'active_window_size', code: 'window_range', min: 20, max: 80 });
+    }
+  }
+  if (!Number.isFinite(input.investment) || input.investment <= 0) {
+    issues.push({ field: 'investment_usdt', code: 'investment_invalid' });
+  }
+  if (!Number.isFinite(input.leverage) || input.leverage < 1 || input.leverage > 50) {
+    issues.push({ field: 'leverage', code: 'leverage_range', min: 1, max: 50 });
+  }
+  return issues;
 }
 
 export interface V2RouterDeps {
@@ -371,6 +461,29 @@ export function createV2Router(deps: V2RouterDeps): Router {
     const visible = local.slice(0, 2);
     return `${visible}${'*'.repeat(Math.max(2, local.length - 2))}@${domain}`;
   };
+
+  function announceBot(
+    ownerId: string,
+    kind: 'bot_created' | 'bot_started' | 'bot_paused' | 'bot_closed' | 'bot_action',
+    botId: number,
+    detail?: string,
+  ): void {
+    void (async () => {
+      const bot = await dbGet<{ pair: string; user_id: string | null }>(
+        db,
+        `SELECT pair, user_id FROM grid_bots WHERE id = ?`,
+        [botId],
+      );
+      const followeeId = bot?.user_id ?? ownerId;
+      notifyFollowers(db, followeeId, kind, `bot:${botId}:${kind}:${Date.now()}`, {
+        pair: bot?.pair ?? null,
+        detail: detail ?? null,
+      });
+      if (mirrorsOn(kind)) mirrorLeaderStart(db, engineOps, botId);
+    })().catch((err) => {
+      log.error({ err: (err as Error).message, botId, kind }, 'follow announce failed');
+    });
+  }
 
   async function issueEmailOtp(params: {
     userId: UserId;
@@ -710,7 +823,7 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
   }));
 
   router.post('/auth/verify-otp', OTP_VERIFY_LIMITER, asyncHandler(async (req, res) => {
-    const body = (req.body ?? {}) as { challengeId?: unknown; code?: unknown };
+    const body = (req.body ?? {}) as { challengeId?: unknown; code?: unknown; lang?: unknown };
     const challengeId = String(body.challengeId ?? '').trim();
     const code = String(body.code ?? '').replace(/\s+/g, '');
     if (!/^[a-f0-9]{48}$/.test(challengeId) || !/^\d{6}$/.test(code)) {
@@ -745,7 +858,8 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
     await gridBotDb.updateUserLastLogin(user.id);
     const hasGrvtCreds = await gridBotDb.hasGrvtCredentials(user.id);
     if (challenge.purpose === 'signup') {
-      sendWelcomeEmail(user.email).catch((err) => {
+      const welcomeLang = body.lang === 'en' ? 'en' : 'es';
+      sendWelcomeEmail(user.email, welcomeLang).catch((err) => {
         log.warn({ err, userId: user.id }, 'welcome email failed');
       });
     }
@@ -874,7 +988,7 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
         terms_text_hash: createHash('sha256').update(tosText).digest('hex'),
       });
       log.info({ userId, email: identity.email, isAdmin }, 'user signed up via google');
-      sendWelcomeEmail(identity.email).catch((err) => {
+      sendWelcomeEmail(identity.email, tosLang).catch((err) => {
         log.warn({ err, userId }, 'welcome email failed');
       });
       res.json(await issueSession(gridBotDb, userId, isAdmin, false));
@@ -948,19 +1062,28 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
     });
   });
 
-  // Public avatar proxy so private Vercel Blob objects can render in <img>.
-  router.get('/community/avatar/:userId', asyncHandler(async (req, res) => {
+  // Public avatar proxy. Objects live on local disk, or on private Vercel Blob.
+  // `:version` is only a cache key (avatarUpdatedAt). The bytes always come
+  // from the user's current object, so an old query-string URL and the bare
+  // podium URL stay interchangeable.
+  const sendCommunityAvatar = asyncHandler(async (req, res) => {
     const userId = String(req.params.userId ?? '').trim();
     if (!isUserId(userId)) return res.status(404).end();
     const user = await gridBotDb.getUserById(userId);
     if (!user?.avatar_url) return res.status(404).end();
     const blob = await fetchBlobBytes(user.avatar_url);
     if (!blob) return res.status(404).end();
-    res.setHeader('Content-Type', blob.contentType);
-    res.setHeader('Cache-Control', 'public, max-age=3600');
+    const contentType = imageContentType(blob.contentType, blob.body);
+    if (!contentType.startsWith('image/')) return res.status(404).end();
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+    res.setHeader('Cache-Control', 'public, max-age=86400');
     res.send(blob.body);
     return;
-  }));
+  });
+  router.get('/community/avatar/:userId', sendCommunityAvatar);
+  router.get('/community/avatar/:userId/:version', sendCommunityAvatar);
 
   // E.9 — Password reset.
   //
@@ -981,7 +1104,7 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
   const RESET_TOKEN_TTL_MIN = 60;
 
   router.post('/auth/forgot-password', RESET_LIMITER, asyncHandler(async (req, res) => {
-    const body = (req.body ?? {}) as { email?: unknown };
+    const body = (req.body ?? {}) as { email?: unknown; lang?: unknown };
     const email = String(body.email ?? '').trim().toLowerCase();
     // Cheap shape check — do not bail with detailed error since that
     // would be an enumeration channel. Just respond 200.
@@ -1031,6 +1154,7 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
         to: user.email,
         resetUrl,
         expiresInMinutes: RESET_TOKEN_TTL_MIN,
+        lang: body.lang === 'es' ? 'es' : 'en',
       });
     } catch (err) {
       // Don't fail the request — user already sees a generic OK and
@@ -1172,6 +1296,7 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
     const user = await gridBotDb.getUserById(userId);
     if (!user) return res.status(404).json({ error: 'user not found' });
     const hasGrvtCreds = await gridBotDb.hasGrvtCredentials(userId);
+    const tags = await ensureUserTags(db, userId);
     res.json({
       id: user.id,
       email: user.email,
@@ -1183,36 +1308,97 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
       bio: user.bio ?? null,
       hasAvatar: Boolean(user.avatar_url),
       avatarUpdatedAt: user.avatar_updated_at ?? null,
+      tags,
+      notifications: prefsFromUserRow(user),
     });
+    return;
+  }));
+
+  router.get('/profile', asyncHandler(async (req, res) => {
+    const userId = req.userId!;
+    const [profile, account, user, tags] = await Promise.all([
+      loadTraderProfile(db, userId),
+      loadAccountPerformance(db, userId, () => fetchUserAccountSlices(userId, gridBotDb)),
+      gridBotDb.getUserById(userId),
+      ensureUserTags(db, userId),
+    ]);
+    const following = await listFollowing(db, userId);
+    res.json({
+      ...profile,
+      account,
+      displayName: user?.display_name ?? null,
+      bio: user?.bio?.trim() || null,
+      tags,
+      following,
+    });
+    return;
+  }));
+
+  router.patch('/auth/notifications', asyncHandler(async (req, res) => {
+    const userId = req.userId!;
+    const prefs = parseNotificationPatch(req.body);
+    await gridBotDb.updateUserNotificationPrefs(userId, prefs);
+    res.json({ ok: true, notifications: prefs });
+    return;
+  }));
+
+  router.get('/auth/tag-suggestion', asyncHandler(async (req, res) => {
+    const name = String(req.query.name ?? '').trim().slice(0, 40);
+    res.json({ tag: await suggestUserTag(db, name) });
     return;
   }));
 
   router.patch('/auth/profile', asyncHandler(async (req, res) => {
     const userId = req.userId!;
-    const body = (req.body ?? {}) as { displayName?: unknown; bio?: unknown };
+    const body = (req.body ?? {}) as { displayName?: unknown; bio?: unknown; tags?: unknown };
     const displayName = String(body.displayName ?? '').trim().slice(0, 40);
     const bio = String(body.bio ?? '').trim().slice(0, 160);
     if (displayName && !/^[\p{L}\p{N} ._\-]+$/u.test(displayName)) {
       return res.status(400).json({ error: 'display name has invalid characters' });
     }
+    let requested: string[] | undefined;
+    if (body.tags !== undefined) {
+      const parsed = collectTags(body.tags);
+      if ('error' in parsed) {
+        return res.status(400).json({ error: parsed.error === 'too_many' ? 'too_many_tags' : 'invalid_tag' });
+      }
+      requested = parsed.tags;
+    }
+    // Name and bio commit on their own. A taken tag must not roll them back,
+    // or the public profile keeps the email and an empty bio.
     await gridBotDb.updateUserProfile(userId, {
       display_name: displayName || null,
       bio: bio || null,
     });
+    let tags: string[];
+    try {
+      const next = requested ?? await listUserTags(db, userId);
+      tags = await setUserTags(db, userId, next);
+    } catch (error) {
+      if (error instanceof TagTakenError) {
+        const user = await gridBotDb.getUserById(userId);
+        return res.status(409).json({
+          error: 'tag_taken',
+          tag: error.tag,
+          handle: error.handle,
+          displayName: user?.display_name ?? null,
+          bio: user?.bio ?? null,
+        });
+      }
+      throw error;
+    }
     const user = await gridBotDb.getUserById(userId);
     res.json({
       ok: true,
       displayName: user?.display_name ?? null,
       bio: user?.bio ?? null,
+      tags,
     });
     return;
   }));
 
   router.post('/auth/avatar', asyncHandler(async (req, res) => {
     const userId = req.userId!;
-    if (!isBlobConfigured()) {
-      return res.status(503).json({ error: 'avatar storage is not configured' });
-    }
     const body = (req.body ?? {}) as { mimeType?: unknown; data?: unknown };
     const mimeType = String(body.mimeType ?? '').trim().toLowerCase();
     const data = String(body.data ?? '').replace(/^data:[^;]+;base64,/, '');
@@ -1598,13 +1784,100 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
     const bot = await dbGet(db, `SELECT * FROM grid_bots WHERE id = ?`, [id]);
     if (!bot) return res.status(404).json({ error: 'bot not found' });
     const published = await getPublishedBySource(db, req.userId!, id);
-    res.json({ bot, publishedId: published?.id ?? null });
+    const activeCopies = await dbGet<{ c: number }>(
+      db,
+      `SELECT COUNT(*) as c FROM grid_bots
+       WHERE copied_from_bot_id = ?
+         AND status IN ('running', 'paused')`,
+      [id],
+    );
+    res.json({
+      bot,
+      publishedId: published?.id ?? null,
+      activeCopyCount: activeCopies?.c ?? 0,
+    });
     return;
   }));
 
   router.get('/community/leaders', asyncHandler(async (_req, res) => {
-    const rows = await listLeaders(db, 10);
+    const rows = await listLeaders(db, 40);
     res.json({ bots: rows.map((row, index) => toLeaderCard(row, index + 1)) });
+    return;
+  }));
+
+  router.get('/community/search', asyncHandler(async (req, res) => {
+    const q = String(req.query.q ?? '');
+    const traders = await searchTraders(db, q);
+    res.json({ traders });
+    return;
+  }));
+
+  router.get('/community/traders/:userId', asyncHandler(async (req, res) => {
+    const userId = parseUserId(req.params.userId);
+    if (!userId) return res.status(400).json({ error: 'invalid user' });
+    const user = await gridBotDb.getUserById(userId);
+    if (!user) return res.status(404).json({ error: 'user not found' });
+    const [profile, account, tags] = await Promise.all([
+      loadTraderProfile(db, userId),
+      loadAccountPerformance(db, userId, () => fetchUserAccountSlices(userId, gridBotDb)),
+      ensureUserTags(db, userId),
+    ]);
+    const follow = req.userId ? await getFollowState(db, req.userId, userId) : {
+      following: false,
+      autoCopy: false,
+      copyInvestmentUsdt: null,
+    };
+    res.json({
+      ...profile,
+      account,
+      equity: account.points,
+      id: user.id,
+      hasAvatar: Boolean(user.avatar_url),
+      avatarUpdatedAt: user.avatar_updated_at ?? null,
+      memberSince: user.created_at,
+      tags,
+      name: publicName(user.display_name, user.email),
+      bio: user.bio?.trim() || null,
+      follow,
+    });
+    return;
+  }));
+
+  router.post('/community/traders/:userId/follow', asyncHandler(async (req, res) => {
+    const followeeId = parseUserId(req.params.userId);
+    if (!followeeId) return res.status(400).json({ error: 'invalid user' });
+    const result = await followUser(db, req.userId!, followeeId);
+    if ('error' in result && result.error === 'self') {
+      return res.status(400).json({ error: 'cannot_follow_self' });
+    }
+    if ('error' in result) return res.status(404).json({ error: 'user not found' });
+    res.status(201).json(await getFollowState(db, req.userId!, followeeId));
+    return;
+  }));
+
+  router.delete('/community/traders/:userId/follow', asyncHandler(async (req, res) => {
+    const followeeId = parseUserId(req.params.userId);
+    if (!followeeId) return res.status(400).json({ error: 'invalid user' });
+    await unfollowUser(db, req.userId!, followeeId);
+    res.json({ following: false, autoCopy: false, copyInvestmentUsdt: null });
+    return;
+  }));
+
+  router.patch('/community/traders/:userId/follow', asyncHandler(async (req, res) => {
+    const followeeId = parseUserId(req.params.userId);
+    if (!followeeId) return res.status(400).json({ error: 'invalid user' });
+    const body = (req.body ?? {}) as { autoCopy?: unknown; investmentUsdt?: unknown };
+    const result = await setAutoCopy(db, req.userId!, followeeId, body.autoCopy === true, body.investmentUsdt);
+    if ('error' in result && result.error === 'missing') {
+      return res.status(404).json({ error: 'not_following' });
+    }
+    if ('error' in result) {
+      return res.status(400).json({
+        error: 'validation_failed',
+        issues: [{ field: 'investment_usdt', code: result.error }],
+      });
+    }
+    res.json(result.state);
     return;
   }));
 
@@ -1863,10 +2136,24 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
     await requireBotOwnership(db, id, req.userId!);
     const limit = Math.min(parseInt(String(req.query.limit ?? '365'), 10) || 365, 1000);
     const offset = Math.max(parseInt(String(req.query.offset ?? '0'), 10) || 0, 0);
-    const snapshots = await dbAll(db, `
+    const snapshots = await dbAll<Record<string, unknown>>(db, `
       SELECT * FROM daily_snapshots WHERE bot_id = ? ORDER BY date DESC LIMIT ? OFFSET ?
     `, [id, limit, offset]);
-    res.json({ snapshots });
+    const live = await dbGet<{
+      status: string;
+      investment_usdt: number;
+      equity: number;
+    }>(db, `
+      SELECT status, investment_usdt, investment_usdt + ${livePnlSql()} AS equity
+      FROM grid_bots WHERE id = ?
+    `, [id]);
+    const today = new Date().toISOString().slice(0, 10);
+    const stamped = (snapshots ?? []).map((row) => {
+      const date = String(row.date ?? '').slice(0, 10);
+      if (!live || live.status === 'stopped' || date !== today) return row;
+      return { ...row, date, equity: live.equity, equity_usdt: live.equity };
+    });
+    res.json({ snapshots: stamped });
     return;
   }));
 
@@ -2364,9 +2651,7 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
       leverage: number;
     }>;
 
-    const errors: string[] = [];
     const pair = String(body.pair ?? '').trim();
-    if (!pair) errors.push('pair is required');
     const direction = body.direction === 'short' ? 'short' : 'long';
     const lower = Number(body.lower_price);
     const upper = Number(body.upper_price);
@@ -2377,26 +2662,76 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
     // H.8: virtual grids unlock num_grids up to 500 (vs 95 cap for legacy).
     const virtualEnabledVal = (body as any).virtual_enabled === true;
     const activeWindowSizeVal = Number((body as any).active_window_size);
-    const maxGrids = virtualEnabledVal ? 500 : 95;
+    const issues = coreBotConfigIssues({
+      pair,
+      lower,
+      upper,
+      grids,
+      investment,
+      leverage,
+      virtualEnabled: virtualEnabledVal,
+      activeWindowSize: activeWindowSizeVal,
+    });
 
-    if (!Number.isFinite(lower) || lower <= 0) errors.push('lower_price must be > 0');
-    if (!Number.isFinite(upper) || upper <= 0) errors.push('upper_price must be > 0');
-    if (lower >= upper) errors.push('lower_price must be < upper_price');
-    if (!Number.isInteger(grids) || grids < 2 || grids > maxGrids) {
-      errors.push(`num_grids must be an integer between 2 and ${maxGrids}`);
-    }
-    if (virtualEnabledVal) {
-      if (!Number.isInteger(activeWindowSizeVal) || activeWindowSizeVal < 20 || activeWindowSizeVal > 80) {
-        errors.push('active_window_size must be between 20 and 80 when virtual_enabled=true');
+    let oppositeSideActive = false;
+    if (!issues.some((issue) => issue.field === 'lower_price' || issue.field === 'upper_price' || issue.field === 'pair')) {
+      try {
+        const ticker = await grvtClient.getTicker(pair);
+        const mark = parseFloat(String((ticker as { mark_price?: string; last_price?: string }).mark_price
+          ?? (ticker as { last_price?: string }).last_price
+          ?? ''));
+        if (Number.isFinite(mark) && mark > 0 && (mark <= lower || mark >= upper)) {
+          issues.push({
+            field: 'lower_price',
+            code: 'price_outside_range',
+            mark,
+            min: lower,
+            max: upper,
+            pair,
+          });
+        }
+      } catch {
+        // Ticker outage should not block the preview; create maps the
+        // engine error if the price is still outside at commit time.
       }
     }
-    if (!Number.isFinite(investment) || investment <= 0) errors.push('investment_usdt must be > 0');
-    if (!Number.isFinite(leverage) || leverage < 1 || leverage > 50) {
-      errors.push('leverage must be between 1 and 50');
+
+    if (req.userId && pair && !issues.some((issue) => issue.code === 'duplicate_direction')) {
+      const rawSub = (body as { grvt_sub_account_id?: number | null }).grvt_sub_account_id;
+      const subId = rawSub == null ? null : Number(rawSub);
+      const sameSide = await dbGet<{ c: number }>(
+        db,
+        `SELECT COUNT(*) as c FROM grid_bots
+         WHERE user_id = ?
+           AND pair = ?
+           AND direction = ?
+           AND COALESCE(grvt_sub_account_id, -1) = COALESCE(?, -1)
+           AND status IN ('running', 'paused')`,
+        [req.userId, pair, direction, Number.isInteger(subId) ? subId : null],
+      );
+      if ((sameSide?.c ?? 0) > 0) {
+        issues.push({ field: 'direction', code: 'duplicate_direction', pair, direction });
+      } else {
+        const otherSide = await dbGet<{ c: number }>(
+          db,
+          `SELECT COUNT(*) as c FROM grid_bots
+           WHERE user_id = ?
+             AND pair = ?
+             AND direction <> ?
+             AND COALESCE(grvt_sub_account_id, -1) = COALESCE(?, -1)
+             AND status IN ('running', 'paused')`,
+          [req.userId, pair, direction, Number.isInteger(subId) ? subId : null],
+        );
+        oppositeSideActive = (otherSide?.c ?? 0) > 0;
+      }
     }
 
-    if (errors.length > 0) {
-      return res.status(400).json({ error: 'validation_failed', errors });
+    if (issues.length > 0) {
+      return res.status(400).json({
+        error: 'validation_failed',
+        errors: issues.map((issue) => issue.code),
+        issues,
+      });
     }
 
     // Computed parameters — must EXACTLY mirror grid-engine.ts +
@@ -2452,6 +2787,7 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
         liqDistancePct: round(liqDistancePct, 2),
       },
       warnings: [
+        ...(oppositeSideActive ? ['opposite_side_active'] : []),
         ...(overOrderCap ? ['num_grids over GRVT Tier 1 cap (95)'] : []),
         ...(leverage > 20 ? ['leverage > 20x: liquidation risk is high'] : []),
       ],
@@ -2485,11 +2821,10 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
       active_window_size: number;
       // H.5: optional sub-account routing. Null/missing = default creds.
       grvt_sub_account_id: number | null;
+      copied_from_bot_id: number | null;
     }>;
 
-    const errors: string[] = [];
     const pair = String(body.pair ?? '').trim();
-    if (!pair) errors.push('pair is required');
     const direction = body.direction === 'short' ? 'short' : 'long';
     const lower = Number(body.lower_price);
     const upper = Number(body.upper_price);
@@ -2500,23 +2835,16 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
     // H.8: virtual grids
     const virtualEnabled = body.virtual_enabled === true;
     const activeWindowSize = Number(body.active_window_size);
-    const maxGridsPost = virtualEnabled ? 500 : 95;
-
-    if (!Number.isFinite(lower) || lower <= 0) errors.push('lower_price must be > 0');
-    if (!Number.isFinite(upper) || upper <= 0) errors.push('upper_price must be > 0');
-    if (lower >= upper) errors.push('lower_price must be < upper_price');
-    if (!Number.isInteger(grids) || grids < 2 || grids > maxGridsPost) {
-      errors.push(`num_grids must be an integer between 2 and ${maxGridsPost}`);
-    }
-    if (virtualEnabled) {
-      if (!Number.isInteger(activeWindowSize) || activeWindowSize < 20 || activeWindowSize > 80) {
-        errors.push('active_window_size must be between 20 and 80 when virtual_enabled=true');
-      }
-    }
-    if (!Number.isFinite(investment) || investment <= 0) errors.push('investment_usdt must be > 0');
-    if (!Number.isFinite(leverage) || leverage < 1 || leverage > 50) {
-      errors.push('leverage must be between 1 and 50');
-    }
+    const issues = coreBotConfigIssues({
+      pair,
+      lower,
+      upper,
+      grids,
+      investment,
+      leverage,
+      virtualEnabled,
+      activeWindowSize,
+    });
 
     // C.4: liquidation proximity safeguard (optional per-bot). If the user
     // opts in, both threshold_pct and action are required. Validation is
@@ -2527,17 +2855,21 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
     if (safeguardEnabled) {
       safeguardThresholdPct = Number(body.safeguard_threshold_pct);
       if (!Number.isFinite(safeguardThresholdPct) || safeguardThresholdPct <= 0 || safeguardThresholdPct > 50) {
-        errors.push('safeguard_threshold_pct must be a number between 0 and 50 when safeguard_enabled=true');
+        issues.push({ field: 'safeguard_threshold_pct', code: 'safeguard_threshold', min: 1, max: 50 });
       }
       if (body.safeguard_action !== 'pause' && body.safeguard_action !== 'pause_close') {
-        errors.push("safeguard_action must be 'pause' or 'pause_close' when safeguard_enabled=true");
+        issues.push({ field: 'safeguard_action', code: 'safeguard_action' });
       } else {
         safeguardAction = body.safeguard_action;
       }
     }
 
-    if (errors.length > 0) {
-      return res.status(400).json({ error: 'validation_failed', errors });
+    if (issues.length > 0) {
+      return res.status(400).json({
+        error: 'validation_failed',
+        errors: issues.map((issue) => issue.code),
+        issues,
+      });
     }
 
     try {
@@ -2553,7 +2885,8 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
         if (!Number.isInteger(id) || id <= 0) {
           return res.status(400).json({
             error: 'validation_failed',
-            errors: ['grvt_sub_account_id must be a positive integer'],
+            errors: ['sub_account_invalid'],
+            issues: [{ field: 'sub_account', code: 'sub_account_invalid' }],
           });
         }
         const sub = await gridBotDb.getGrvtSubAccountRaw(id);
@@ -2561,29 +2894,56 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
           return res.status(400).json({
             error: 'invalid_sub_account',
             message: 'Sub-account not found',
+            issues: [{ field: 'sub_account', code: 'sub_account_invalid' }],
           });
         }
         grvtSubAccountId = id;
       }
 
-      // C.9 + H.5: reject if the same (user, pair, sub-account) tuple
-      // already has an active bot. Same instrument on a DIFFERENT
-      // sub-account is allowed — that's the whole point of H.5.
-      // COALESCE folds NULL into a sentinel so the equality test works
-      // for both the default-creds path and explicit sub-accounts.
+      let copiedFromBotId: number | null = null;
+      if (body.copied_from_bot_id != null) {
+        const sourceId = Number(body.copied_from_bot_id);
+        if (!Number.isInteger(sourceId) || sourceId <= 0) {
+          return res.status(400).json({
+            error: 'validation_failed',
+            errors: ['copied_from_invalid'],
+            issues: [{ field: 'pair', code: 'copied_from_invalid' }],
+          });
+        }
+        const publishedSource = await dbGet<{ id: number }>(
+          db,
+          `SELECT id FROM published_bots WHERE source_bot_id = ? LIMIT 1`,
+          [sourceId],
+        );
+        if (!publishedSource) {
+          return res.status(400).json({
+            error: 'validation_failed',
+            errors: ['copied_from_invalid'],
+            issues: [{ field: 'pair', code: 'copied_from_invalid' }],
+          });
+        }
+        copiedFromBotId = sourceId;
+      }
+
+      // Same pair + same direction + same sub-account cannot have two
+      // active bots. The opposite direction is a different bot: a long
+      // can stay paused while a short is open, and the other way around.
+      // A different sub-account is also a different book.
       const existing = await dbGet<{ c: number }>(
         db,
         `SELECT COUNT(*) as c FROM grid_bots
          WHERE user_id = ?
            AND pair = ?
+           AND direction = ?
            AND COALESCE(grvt_sub_account_id, -1) = COALESCE(?, -1)
            AND status IN ('running', 'paused')`,
-        [userId, pair, grvtSubAccountId]
+        [userId, pair, direction, grvtSubAccountId]
       );
       if (existing && existing.c > 0) {
         return res.status(409).json({
           error: 'duplicate_instrument',
-          message: `You already have an active bot on ${pair} for this sub-account. Close or stop it before creating a new one.`,
+          message: `You already have an active ${direction} bot on ${pair} for this sub-account.`,
+          issues: [{ field: 'direction', code: 'duplicate_direction', pair, direction }],
         });
       }
 
@@ -2599,6 +2959,7 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
         virtualEnabled,
         activeWindowSize: virtualEnabled ? activeWindowSize : undefined,
         grvtSubAccountId,
+        copiedFromBotId,
       });
       log.info({ botId, userId, pair, direction, leverage, grids }, 'bot created (paused)');
 
@@ -2675,12 +3036,29 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
       }
 
       cache.invalidatePrefix('bots');
+      announceBot(userId, 'bot_created', botId);
       res.status(201).json({ id: botId, status: 'paused' });
     } catch (err) {
-      log.error({ err: (err as Error).message }, 'bot creation failed');
+      const message = (err as Error).message;
+      log.error({ err: message }, 'bot creation failed');
+      const markMatch = message.match(/(\d+(?:\.\d+)?)/);
+      if (/fuera del rango|outside/i.test(message)) {
+        res.status(400).json({
+          error: 'validation_failed',
+          message,
+          issues: [{
+            field: 'lower_price',
+            code: 'price_outside_range',
+            mark: markMatch ? Number(markMatch[1]) : undefined,
+            pair,
+          }],
+        });
+        return;
+      }
       res.status(500).json({
         error: 'create_failed',
-        message: (err as Error).message,
+        message,
+        issues: [{ field: 'form', code: 'generic', message }],
       });
     }
     return;
@@ -2694,11 +3072,45 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
   router.post('/bots/:id/start', asyncHandler(async (req, res) => {
     const id = parseInt(String(req.params.id ?? ''), 10);
     if (!Number.isFinite(id)) return res.status(400).json({ error: 'invalid bot id' });
-    await requireBotOwnership(db, id, req.userId!);
+    const owned = await requireBotOwnership(db, id, req.userId!);
+    const meta = await dbGet<{
+      direction: 'long' | 'short';
+      grvt_sub_account_id: number | null;
+    }>(
+      db,
+      `SELECT direction, grvt_sub_account_id FROM grid_bots WHERE id = ?`,
+      [id],
+    );
+    if (meta?.direction === 'long' || meta?.direction === 'short') {
+      const opposite = await dbGet<{ c: number }>(
+        db,
+        `SELECT COUNT(*) as c FROM grid_bots
+         WHERE user_id = ?
+           AND pair = ?
+           AND direction <> ?
+           AND id <> ?
+           AND COALESCE(grvt_sub_account_id, -1) = COALESCE(?, -1)
+           AND status = 'running'`,
+        [req.userId, owned.pair, meta.direction, id, meta.grvt_sub_account_id],
+      );
+      if ((opposite?.c ?? 0) > 0) {
+        return res.status(409).json({
+          error: 'opposite_side_running',
+          message: `The other side of ${owned.pair} is already running. Pause it before starting this one.`,
+          issues: [{
+            field: 'direction',
+            code: 'opposite_side_running',
+            pair: owned.pair,
+            direction: meta.direction,
+          }],
+        });
+      }
+    }
     try {
       await engineOps.startBot(id);
       log.info({ botId: id }, 'bot started via API');
       cache.invalidatePrefix('bots');
+      announceBot(req.userId!, 'bot_started', id);
       res.json({ id, status: 'running' });
     } catch (err) {
       log.error({ botId: id, err: (err as Error).message }, 'bot start failed');
@@ -2720,6 +3132,7 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
       await engineOps.pauseBot(id);
       log.info({ botId: id }, 'bot paused via API');
       cache.invalidatePrefix('bots');
+      announceBot(req.userId!, 'bot_paused', id);
       res.json({ id, status: 'paused' });
     } catch (err) {
       log.error({ botId: id, err: (err as Error).message }, 'bot pause failed');
@@ -2742,10 +3155,12 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
     if (!Number.isFinite(id)) return res.status(400).json({ error: 'invalid bot id' });
     await requireBotOwnership(db, id, req.userId!);
     try {
-      await engineOps.closeBot(id);
-      log.info({ botId: id }, 'bot closed via API');
+      const closedCopies = Number(await engineOps.closeBot(id)) || 0;
+      await publishStoppedBots(db);
+      log.info({ botId: id, closedCopies }, 'bot closed via API');
       cache.invalidatePrefix('bots');
-      res.json({ id, status: 'stopped' });
+      announceBot(req.userId!, 'bot_closed', id);
+      res.json({ id, status: 'stopped', closedCopies });
     } catch (err) {
       log.error({ botId: id, err: (err as Error).message }, 'bot close failed');
       respondLifecycleError(res, err, 'close_failed', gridBotDb, req.userId!);
@@ -2789,6 +3204,7 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
 
     cache.invalidatePrefix('bots');
     log.info({ botId: id, ...updates }, 'compound settings updated');
+    announceBot(req.userId!, 'bot_action', id, 'compound');
     res.json({ id, ...updates });
     return;
   }));
@@ -2839,6 +3255,7 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
 
     cache.invalidatePrefix('bots');
     log.info({ botId: id, ...updates }, 'risk settings updated');
+    announceBot(req.userId!, 'bot_action', id, 'risk');
     res.json({ id, ...updates });
     return;
   }));
@@ -2929,6 +3346,7 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
       await engineOps.updateBotRange(id, lowerPrice, upperPrice);
       log.info({ botId: id, lowerPrice, upperPrice }, 'bot range updated via API');
       cache.invalidatePrefix('bots');
+      announceBot(req.userId!, 'bot_action', id, 'range');
       const updated = await dbGet<{
         lower_price: number;
         upper_price: number;
@@ -2946,6 +3364,45 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
         'bot range update failed'
       );
       respondLifecycleError(res, err, 'range_update_failed', gridBotDb, req.userId!);
+    }
+    return;
+  }));
+
+  // ── POST /api/v2/bots/:id/investment ──────────────────────────────
+  // Change the capital assigned to a live or paused bot. Recalculates
+  // quantity_per_level and resizes levels that do not have a live order.
+  // Open orders keep their size until they fill.
+  router.post('/bots/:id/investment', asyncHandler(async (req, res) => {
+    const id = parseInt(String(req.params.id ?? ''), 10);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: 'invalid bot id' });
+    await requireBotOwnership(db, id, req.userId!);
+    const investmentUsdt = Number((req.body as { investmentUsdt?: unknown } | null)?.investmentUsdt);
+    if (!Number.isFinite(investmentUsdt) || investmentUsdt <= 0) {
+      return res.status(400).json({
+        error: 'validation_failed',
+        issues: [{ field: 'investment_usdt', code: 'investment_invalid' }],
+      });
+    }
+    if (!engineOps.updateBotInvestment) {
+      return res.status(501).json({ error: 'not_supported' });
+    }
+    try {
+      const result = await engineOps.updateBotInvestment(id, investmentUsdt);
+      cache.invalidatePrefix('bots');
+      log.info({ botId: id, ...result }, 'bot investment updated');
+      announceBot(req.userId!, 'bot_action', id, 'investment');
+      res.json({ id, ...result });
+    } catch (err) {
+      const message = (err as Error).message;
+      log.error({ botId: id, err: message }, 'bot investment update failed');
+      if (/stopped bot|investment must/i.test(message)) {
+        return res.status(400).json({
+          error: 'validation_failed',
+          message,
+          issues: [{ field: 'investment_usdt', code: 'investment_invalid', message }],
+        });
+      }
+      respondLifecycleError(res, err, 'investment_update_failed', gridBotDb, req.userId!);
     }
     return;
   }));
@@ -3055,10 +3512,13 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
       id: number; pair: string; status: string; leverage: number;
       investment_usdt: number;
       grid_profit_usdt: number; trend_pnl_usdt: number;
+      pnl_usdt: number;
       position_size: number; avg_entry_price: number;
     }>(db, `
       SELECT id, pair, status, leverage, investment_usdt,
-             grid_profit_usdt, trend_pnl_usdt, position_size, avg_entry_price
+             grid_profit_usdt, trend_pnl_usdt,
+             ${livePnlSql()} AS pnl_usdt,
+             position_size, avg_entry_price
       FROM grid_bots
       WHERE user_id = ? AND status != 'stopped'
     `, [userId]);
@@ -3072,12 +3532,12 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
     const pairExposure: Record<string, number> = {};
 
     for (const b of bots) {
-      const botPnl = b.grid_profit_usdt + b.trend_pnl_usdt;
+      const botPnl = b.pnl_usdt;
       const equity = b.investment_usdt + botPnl;
       const positionUsdt = b.position_size * b.avg_entry_price;
       totalInvested += b.investment_usdt;
       totalEquity += equity;
-      totalRealized += b.grid_profit_usdt;
+      totalRealized += botPnl - b.trend_pnl_usdt;
       totalUnrealized += b.trend_pnl_usdt;
       totalPositionUsdt += positionUsdt;
       weightedLeverage += b.leverage * b.investment_usdt;
@@ -3111,17 +3571,8 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
   router.get('/portfolio-equity-curve', asyncHandler(async (req, res) => {
     const userId = req.userId!;
     const days = Math.min(parseInt(String(req.query.days ?? '90'), 10) || 90, 365);
-    const rows = await dbAll<{ date: string; equity: number }>(db, `
-      SELECT s.date, SUM(s.equity) AS equity
-      FROM daily_snapshots s
-      JOIN grid_bots b ON b.id = s.bot_id
-      WHERE b.user_id = ?
-        AND b.status != 'stopped'
-        AND s.date >= TO_CHAR(CURRENT_DATE - (?::integer * INTERVAL '1 day'), 'YYYY-MM-DD')
-      GROUP BY s.date
-      ORDER BY s.date ASC
-    `, [userId, days]);
-    res.json({ points: rows });
+    const points = await loadTraderEquityCurve(db, userId, days);
+    res.json({ points });
     return;
   }));
 

@@ -280,6 +280,7 @@ export interface WizardPreset {
   compound_pct?: number;
   copiedFrom?: {
     publishedId: number;
+    sourceBotId?: number | null;
     authorName: string;
     rangeAdapted?: boolean;
     originalLower?: number;
@@ -369,12 +370,15 @@ export interface UserProfile {
   bio: string | null;
   hasAvatar: boolean;
   avatarUpdatedAt: number | null;
+  tags: string[];
 }
 
 export interface CommunityAuthor {
   id: string;
   name: string;
   hasAvatar: boolean;
+  avatarUpdatedAt?: number | null;
+  tags?: string[];
 }
 
 export interface CommunityBot {
@@ -400,9 +404,199 @@ export interface CommunityBot {
   pnlPct: number;
   copiesCount: number;
   publishedAt: number;
+  liveStatus?: 'running' | 'paused' | 'stopped' | 'closed' | 'aggregate';
+  startedAt?: number | null;
+  endedAt?: number | null;
+  durationMs?: number | null;
+  roundtrips?: number;
+  sourceBotId?: number | null;
   isAuthorTotal?: boolean;
   author: CommunityAuthor;
 }
+
+export interface ProfileOwnBot {
+  id: number;
+  pair: string;
+  direction: 'long' | 'short';
+  leverage: number;
+  status: BotStatus;
+  investmentUsdt: number;
+  realizedUsdt: number;
+  unrealizedUsdt: number;
+  pnlUsdt: number;
+  pnlPct: number;
+  createdAt: string;
+  copiedFromBotId: number | null;
+  copiedFromName: string | null;
+  published: boolean;
+  publishedId: number | null;
+}
+
+export interface ProfileStrategy {
+  id: number;
+  title: string;
+  pair: string;
+  direction: 'long' | 'short';
+  leverage: number;
+  liveStatus: BotStatus | 'closed';
+  ownPnlUsdt: number;
+  ownPnlPct: number;
+  copiesCount: number;
+  copiesCreated: number;
+  uniqueCopiers: number;
+  copiesRunning: number;
+  copiesPaused: number;
+  copiesClosed: number;
+  copierInvestedUsdt: number;
+  copierPnlUsdt: number;
+  copierPnlPct: number;
+  publishedAt: number;
+  sourceBotId: number | null;
+}
+
+export interface ProfileCopier {
+  id: string;
+  name: string;
+  tags: string[];
+  hasAvatar: boolean;
+  botId: number | null;
+  pair: string | null;
+  status: 'running' | 'paused' | 'stopped' | null;
+  investmentUsdt: number | null;
+  pnlUsdt: number | null;
+  pnlPct: number | null;
+}
+
+export interface TraderProfile {
+  bots: {
+    created: number;
+    running: number;
+    paused: number;
+    closed: number;
+    published: number;
+    copiedFromOthers: number;
+    roundtrips: number;
+  };
+  earnings: {
+    investedUsdt: number;
+    originalInvestedUsdt: number;
+    realizedUsdt: number;
+    unrealizedUsdt: number;
+    totalPnlUsdt: number;
+    totalPnlPct: number;
+    pnlRunningUsdt: number;
+    pnlPausedUsdt: number;
+    pnlClosedUsdt: number;
+    investedRunningUsdt: number;
+    reinvestedUsdt: number;
+    pairedProfitUsdt: number;
+    feesUsdt: number;
+    fundingUsdt: number;
+  };
+  audience: {
+    uniqueCopiers: number;
+    copyInterests: number;
+    uniqueInterestPeople: number;
+    copiesCreated: number;
+    copiesRunning: number;
+    copiesPaused: number;
+    copiesClosed: number;
+    investedUsdt: number;
+    realizedUsdt: number;
+    unrealizedUsdt: number;
+    pnlUsdt: number;
+    pnlPct: number;
+  };
+  copiers: ProfileCopier[];
+  strategies: ProfileStrategy[];
+  ownBots: ProfileOwnBot[];
+  bestBotId: number | null;
+  worstBotId: number | null;
+  account?: AccountPerformance;
+  displayName?: string | null;
+  bio?: string | null;
+  tags?: string[];
+  following?: FollowingEntry[];
+}
+
+export interface AccountPerformance {
+  connected: boolean;
+  live: boolean;
+  equityUsdt: number;
+  unrealizedUsdt: number;
+  realizedUsdt: number;
+  fundingUsdt: number;
+  totalPnlUsdt: number;
+  points: Array<{ date: string; equity: number }>;
+}
+
+export interface TraderSearchBot {
+  id: number;
+  title: string;
+  pair: string;
+  pnlUsdt: number;
+  pnlPct: number;
+  status: string | null;
+}
+
+export interface TraderSearchHit {
+  id: string;
+  name: string;
+  tag: string;
+  handle: string;
+  bio: string | null;
+  hasAvatar: boolean;
+  avatarUpdatedAt: number | null;
+  runningBots: number;
+  published: TraderSearchBot[];
+}
+
+export interface FollowState {
+  following: boolean;
+  autoCopy: boolean;
+  copyInvestmentUsdt: number | null;
+}
+
+export interface FollowingEntry {
+  id: string;
+  name: string;
+  hasAvatar: boolean;
+  avatarUpdatedAt: number | null;
+  autoCopy: boolean;
+  copyInvestmentUsdt: number | null;
+}
+
+export interface PublicTraderProfile extends TraderProfile {
+  id: string;
+  name: string;
+  bio: string | null;
+  hasAvatar: boolean;
+  avatarUpdatedAt: number | null;
+  memberSince: number;
+  tags: string[];
+  equity: Array<{ date: string; equity: number }>;
+  follow?: FollowState;
+}
+
+export interface NotificationPrefs {
+  emailsEnabled: boolean;
+  profitMilestones: boolean;
+  drawdown: boolean;
+  liqProximity: boolean;
+  statusChanges: boolean;
+  dailySummary: boolean;
+  profitMilestonePct: number;
+}
+
+export const DEFAULT_NOTIFICATION_PREFS: NotificationPrefs = {
+  emailsEnabled: true,
+  profitMilestones: true,
+  drawdown: true,
+  liqProximity: true,
+  statusChanges: true,
+  dailySummary: false,
+  profitMilestonePct: 5,
+};
 
 export interface HealthV2 {
   status: 'ok';
