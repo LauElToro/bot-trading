@@ -3356,6 +3356,15 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
     fee_pct?: number;
     interval?: string;
     limit?: number;
+    sl_pct?: number;
+    tp_pct?: number;
+    auto_shift_enabled?: boolean;
+    auto_shift_pct?: number;
+    compound_pct?: number;
+    virtual_enabled?: boolean;
+    active_window_size?: number;
+    funding_rate_pct?: number;
+    days?: number;
   }
 
   router.post('/backtest', asyncHandler(async (req, res) => {
@@ -3363,6 +3372,8 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
     const {
       pair, direction, leverage, lower_price, upper_price, num_grids,
       investment_usdt, fee_pct, interval, limit: candleLimit,
+      sl_pct, tp_pct, auto_shift_enabled, auto_shift_pct, compound_pct,
+      virtual_enabled, active_window_size, funding_rate_pct, days,
     } = body;
 
     const errors: string[] = [];
@@ -3376,16 +3387,52 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
     if (fee_pct != null && (!Number.isFinite(fee_pct) || fee_pct < 0 || fee_pct > 1)) {
       errors.push('fee_pct in [0, 1]');
     }
+    if (sl_pct != null && (!Number.isFinite(sl_pct) || sl_pct < 0 || sl_pct > 100)) {
+      errors.push('sl_pct in [0, 100]');
+    }
+    if (tp_pct != null && (!Number.isFinite(tp_pct) || tp_pct < 0 || tp_pct > 1000)) {
+      errors.push('tp_pct in [0, 1000]');
+    }
+    if (auto_shift_enabled && (!Number.isFinite(auto_shift_pct) || (auto_shift_pct ?? 0) <= 0 || (auto_shift_pct ?? 0) > 100)) {
+      errors.push('auto_shift_pct in (0, 100]');
+    }
+    if (compound_pct != null && (!Number.isFinite(compound_pct) || compound_pct < 0 || compound_pct > 100)) {
+      errors.push('compound_pct in [0, 100]');
+    }
+    if (virtual_enabled && (!Number.isInteger(active_window_size) || (active_window_size ?? 0) < 1 || (active_window_size ?? 0) > 80)) {
+      errors.push('active_window_size in [1, 80]');
+    }
+    if (funding_rate_pct != null && (!Number.isFinite(funding_rate_pct) || funding_rate_pct < -5 || funding_rate_pct > 5)) {
+      errors.push('funding_rate_pct in [-5, 5]');
+    }
+    if (days != null && (!Number.isFinite(days) || days < 1 || days > 120)) {
+      errors.push('days in [1, 120]');
+    }
     if (errors.length) return res.status(400).json({ error: 'validation_failed', errors });
 
     try {
       // Local GrvtClient interface (line 46) types getKlines as
       // Promise<unknown[]>. Cast to the real shape from the
       // implementation so the .map below stays type-safe.
+      const spanDays = days != null ? Math.round(days) : null;
+      let candleInterval = interval ?? 'CI_1_H';
+      let candleCount = Math.min(candleLimit ?? 500, 1000);
+      if (spanDays != null) {
+        if (spanDays * 96 <= 1000) {
+          candleInterval = 'CI_15_M';
+          candleCount = spanDays * 96;
+        } else if (spanDays * 24 <= 1000) {
+          candleInterval = 'CI_1_H';
+          candleCount = spanDays * 24;
+        } else {
+          candleInterval = 'CI_4_H';
+          candleCount = Math.min(1000, spanDays * 6);
+        }
+      }
       const klines = (await grvtClient.getKlines(
         pair!,
-        interval ?? 'CI_1_H',
-        Math.min(candleLimit ?? 500, 1000)
+        candleInterval,
+        candleCount
       )) as Array<{
         openTime: number;
         open: number;
@@ -3413,6 +3460,14 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
           numGrids: num_grids!,
           investmentUSDT: investment_usdt!,
           feePct: fee_pct,
+          slPct: sl_pct,
+          tpPct: tp_pct,
+          autoShiftEnabled: auto_shift_enabled === true,
+          autoShiftPct: auto_shift_pct,
+          compoundPct: compound_pct,
+          virtualEnabled: virtual_enabled === true,
+          activeWindowSize: active_window_size,
+          fundingRatePct: funding_rate_pct,
         },
         candles
       );
@@ -3427,7 +3482,20 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
       const last = curve[curve.length - 1];
       if (last && thinCurve[thinCurve.length - 1] !== last) thinCurve.push(last);
 
-      res.json({ ...result, equityCurve: thinCurve });
+      const frames = result.frames;
+      const frameStep = Math.max(1, Math.floor(frames.length / 400));
+      const thinFrames: typeof frames = [];
+      for (let i = 0; i < frames.length; i += frameStep) thinFrames.push(frames[i]!);
+      const lastFrame = frames[frames.length - 1];
+      if (lastFrame && thinFrames[thinFrames.length - 1] !== lastFrame) thinFrames.push(lastFrame);
+
+      res.json({
+        ...result,
+        equityCurve: thinCurve,
+        frames: thinFrames,
+        interval: candleInterval,
+        days: spanDays ?? result.daysInMarket,
+      });
     } catch (err) {
       res.status(500).json({ error: 'backtest_failed' });
     }

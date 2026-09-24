@@ -5,7 +5,7 @@
 // "Apply to wizard" navigates to / with the inputs in router state, which
 // OverviewPage reads to open the create-bot-wizard pre-filled.
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { Play, ArrowRight, AlertTriangle } from 'lucide-react';
@@ -20,7 +20,6 @@ import { useT } from '@/i18n';
 import type {
   BacktestInput,
   BacktestResult,
-  CandleInterval,
 } from '@/lib/api-types';
 
 interface FormState {
@@ -32,8 +31,16 @@ interface FormState {
   grids: string;
   investment: string;
   feePct: string;
-  interval: CandleInterval;
-  limit: string;
+  duration: string;
+  durationUnit: 'days' | 'weeks';
+  sl: string;
+  tp: string;
+  autoShift: boolean;
+  autoShiftPct: string;
+  compound: string;
+  virtual: boolean;
+  windowSize: string;
+  funding: string;
 }
 
 const INITIAL: FormState = {
@@ -45,17 +52,25 @@ const INITIAL: FormState = {
   grids: '40',
   investment: '500',
   feePct: '0.05',
-  interval: 'CI_1_H',
-  limit: '500',
+  duration: '2',
+  durationUnit: 'weeks',
+  sl: '',
+  tp: '',
+  autoShift: false,
+  autoShiftPct: '10',
+  compound: '0',
+  virtual: false,
+  windowSize: '70',
+  funding: '0',
 };
 
-const INTERVAL_KEYS: Array<{ value: CandleInterval; key: string }> = [
-  { value: 'CI_15_M', key: 'backtest.interval15m' },
-  { value: 'CI_30_M', key: 'backtest.interval30m' },
-  { value: 'CI_1_H', key: 'backtest.interval1h' },
-  { value: 'CI_4_H', key: 'backtest.interval4h' },
-  { value: 'CI_1_D', key: 'backtest.interval1d' },
-];
+const INTERVAL_LABEL: Record<string, string> = {
+  CI_15_M: '15 min',
+  CI_30_M: '30 min',
+  CI_1_H: '1 h',
+  CI_4_H: '4 h',
+  CI_1_D: '1 d',
+};
 
 const FALLBACK_PAIRS = [
   { value: 'ETH_USDT_Perp', label: 'ETH-USDT-Perp' },
@@ -91,7 +106,14 @@ export function BacktestPage() {
   const investment = parseFloat(form.investment);
   const leverage = parseFloat(form.leverage);
   const feePct = parseFloat(form.feePct);
-  const limit = parseInt(form.limit, 10);
+  const duration = parseFloat(form.duration);
+  const days = form.durationUnit === 'weeks' ? duration * 7 : duration;
+  const sl = form.sl.trim() === '' ? null : parseFloat(form.sl);
+  const tp = form.tp.trim() === '' ? null : parseFloat(form.tp);
+  const shiftPct = parseFloat(form.autoShiftPct);
+  const compound = parseFloat(form.compound);
+  const windowSize = parseInt(form.windowSize, 10);
+  const funding = parseFloat(form.funding);
 
   const errors: string[] = [];
   if (!form.pair) errors.push(t('backtest.validation.pairRequired'));
@@ -102,6 +124,14 @@ export function BacktestPage() {
   if (!Number.isFinite(investment) || investment <= 0) errors.push(t('backtest.validation.investmentGt0'));
   if (!Number.isFinite(leverage) || leverage < 1) errors.push(t('backtest.validation.leverageMin'));
   if (!Number.isFinite(feePct) || feePct < 0 || feePct > 1) errors.push(t('backtest.validation.feeRange'));
+  if (!Number.isFinite(duration) || duration < 1) errors.push(t('backtest.validation.durationMin'));
+  if (days > 120) errors.push(t('backtest.validation.durationMax'));
+  if (sl != null && (!Number.isFinite(sl) || sl < 0 || sl > 100)) errors.push(t('backtest.validation.slRange'));
+  if (tp != null && (!Number.isFinite(tp) || tp < 0 || tp > 1000)) errors.push(t('backtest.validation.tpRange'));
+  if (form.autoShift && (!Number.isFinite(shiftPct) || shiftPct <= 0 || shiftPct > 100)) errors.push(t('backtest.validation.shiftRange'));
+  if (!Number.isFinite(compound) || compound < 0 || compound > 100) errors.push(t('backtest.validation.compoundRange'));
+  if (form.virtual && (!Number.isInteger(windowSize) || windowSize < 1 || windowSize > 80)) errors.push(t('backtest.validation.windowRange'));
+  if (!Number.isFinite(funding) || funding < -5 || funding > 5) errors.push(t('backtest.validation.fundingRange'));
   const isValid = errors.length === 0;
 
   function update<K extends keyof FormState>(key: K, value: FormState[K]) {
@@ -119,8 +149,13 @@ export function BacktestPage() {
       num_grids: grids,
       investment_usdt: investment,
       fee_pct: feePct,
-      interval: form.interval,
-      limit,
+      days,
+      ...(sl != null && sl > 0 ? { sl_pct: sl } : {}),
+      ...(tp != null && tp > 0 ? { tp_pct: tp } : {}),
+      ...(form.autoShift ? { auto_shift_enabled: true, auto_shift_pct: shiftPct } : {}),
+      ...(compound > 0 ? { compound_pct: compound } : {}),
+      ...(form.virtual ? { virtual_enabled: true, active_window_size: windowSize } : {}),
+      ...(funding !== 0 ? { funding_rate_pct: funding } : {}),
     });
   }
 
@@ -135,6 +170,11 @@ export function BacktestPage() {
           upper_price: upper,
           num_grids: grids,
           investment_usdt: investment,
+          ...(sl != null && sl > 0 ? { sl_pct: sl } : {}),
+          ...(tp != null && tp > 0 ? { tp_pct: tp } : {}),
+          ...(form.autoShift ? { auto_shift_enabled: true, auto_shift_pct: shiftPct } : {}),
+          ...(compound > 0 ? { compound_pct: compound } : {}),
+          ...(form.virtual ? { virtual_enabled: true, active_window_size: windowSize } : {}),
         },
       },
     });
@@ -235,28 +275,98 @@ export function BacktestPage() {
               helper={t('backtest.feeHelper')}
             />
             <Input
-              label={t('backtest.candles')}
+              label={t('backtest.duration')}
               numeric
-              value={form.limit}
-              onChange={(e) => update('limit', e.target.value)}
-              helper={t('backtest.candlesHelper')}
+              value={form.duration}
+              onChange={(e) => update('duration', e.target.value)}
+            />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <label className="text-2xs font-semibold uppercase tracking-wider text-text-muted">
+              {t('backtest.durationUnit')}
+            </label>
+            <select
+              value={form.durationUnit}
+              onChange={(e) => update('durationUnit', e.target.value as 'days' | 'weeks')}
+              className="h-10 px-3 rounded-md bg-bg-surface border border-border-subtle text-sm text-text-primary"
+            >
+              <option value="days">{t('backtest.unitDays')}</option>
+              <option value="weeks">{t('backtest.unitWeeks')}</option>
+            </select>
+            <p className="text-2xs text-text-muted">
+              {t('backtest.runFor', {
+                days: Math.round(days) || 0,
+                weeks: Math.max(1, Math.round((days || 0) / 7)),
+              })}
+            </p>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <Input
+              label={t('backtest.stopLoss')}
+              numeric
+              value={form.sl}
+              onChange={(e) => update('sl', e.target.value)}
+              helper={t('backtest.riskHelper')}
+            />
+            <Input
+              label={t('backtest.takeProfit')}
+              numeric
+              value={form.tp}
+              onChange={(e) => update('tp', e.target.value)}
+              helper={t('backtest.riskHelper')}
             />
           </div>
 
-          <div className="flex flex-col gap-1.5">
-            <label className="text-2xs font-semibold uppercase tracking-wider text-text-muted">
-              {t('backtest.interval')}
-            </label>
-            <select
-              value={form.interval}
-              onChange={(e) => update('interval', e.target.value as CandleInterval)}
-              className="h-10 px-3 rounded-md bg-bg-surface border border-border-subtle text-sm text-text-primary"
-            >
-              {INTERVAL_KEYS.map((i) => (
-                <option key={i.value} value={i.value}>{t(i.key)}</option>
-              ))}
-            </select>
+          <div className="grid grid-cols-2 gap-3">
+            <Input
+              label={t('backtest.compound')}
+              numeric
+              value={form.compound}
+              onChange={(e) => update('compound', e.target.value)}
+            />
+            <Input
+              label={t('backtest.funding')}
+              numeric
+              value={form.funding}
+              onChange={(e) => update('funding', e.target.value)}
+              helper={t('backtest.fundingHelper')}
+            />
           </div>
+
+          <label className="flex items-center gap-2 text-sm text-text-primary">
+            <input
+              type="checkbox"
+              checked={form.autoShift}
+              onChange={(e) => update('autoShift', e.target.checked)}
+            />
+            {t('backtest.autoShift')}
+          </label>
+          {form.autoShift && (
+            <Input
+              label={t('backtest.autoShiftPct')}
+              numeric
+              value={form.autoShiftPct}
+              onChange={(e) => update('autoShiftPct', e.target.value)}
+            />
+          )}
+
+          <label className="flex items-center gap-2 text-sm text-text-primary">
+            <input
+              type="checkbox"
+              checked={form.virtual}
+              onChange={(e) => update('virtual', e.target.checked)}
+            />
+            {t('backtest.virtual')}
+          </label>
+          {form.virtual && (
+            <Input
+              label={t('backtest.windowSize')}
+              numeric
+              value={form.windowSize}
+              onChange={(e) => update('windowSize', e.target.value)}
+            />
+          )}
 
           {!isValid && (
             <ul className="text-2xs text-danger flex flex-col gap-0.5">
@@ -305,6 +415,121 @@ export function BacktestPage() {
       </div>
     </div>
   );
+}
+
+function GridReplay({ result }: { result: BacktestResult }) {
+  const t = useT();
+  const frames = result.frames ?? [];
+  const [index, setIndex] = useState(0);
+  const [playing, setPlaying] = useState(false);
+
+  useEffect(() => {
+    setIndex(0);
+    setPlaying(frames.length > 1);
+  }, [frames]);
+
+  useEffect(() => {
+    if (!playing || frames.length < 2) return;
+    const timer = window.setInterval(() => {
+      setIndex((current) => {
+        if (current >= frames.length - 1) {
+          setPlaying(false);
+          return current;
+        }
+        return current + 1;
+      });
+    }, 80);
+    return () => window.clearInterval(timer);
+  }, [playing, frames.length]);
+
+  if (frames.length === 0) return null;
+  const frame = frames[Math.min(index, frames.length - 1)]!;
+  const span = Math.max(frame.upper - frame.lower, 1);
+  const lines = Array.from({ length: 13 }, (_, i) => frame.lower + (span * i) / 12);
+  const priceY = (price: number) => {
+    const raw = 100 - ((price - frame.lower) / span) * 100;
+    return Math.min(98, Math.max(2, raw));
+  };
+  const day = Math.max(1, Math.round((frame.time - frames[0]!.time) / 86400) + 1);
+  const week = Math.max(1, Math.ceil(day / 7));
+  const interval = INTERVAL_LABEL[result.interval ?? ''] ?? result.interval ?? '';
+
+  return (
+    <Card>
+      <div className="flex items-center justify-between mb-3 gap-3">
+        <h2 className="text-sm font-semibold text-text-secondary uppercase tracking-wider">
+          {t('backtest.replay')}
+        </h2>
+        <button
+          type="button"
+          className="text-xs text-text-primary underline"
+          onClick={() => {
+            if (index >= frames.length - 1) setIndex(0);
+            setPlaying((value) => !value);
+          }}
+        >
+          {playing ? t('backtest.replayPause') : t('backtest.replayPlay')}
+        </button>
+      </div>
+      <p className="text-xs text-text-muted mb-3">
+        {t('backtest.replayCaption', {
+          day,
+          week,
+          price: frame.price.toFixed(2),
+          position: frame.position.toFixed(3),
+        })}
+        {interval ? ` · ${interval}` : ''}
+      </p>
+      <svg viewBox="0 0 100 100" className="w-full h-56 bg-bg-surface rounded-md">
+        {lines.map((price) => {
+          const y = priceY(price);
+          const buy = price < frame.price;
+          return (
+            <line
+              key={price}
+              x1="8"
+              x2="92"
+              y1={y}
+              y2={y}
+              stroke={buy ? 'var(--color-success)' : 'var(--color-danger)'}
+              strokeOpacity={0.45}
+              strokeWidth={0.4}
+            />
+          );
+        })}
+        <line
+          x1="6"
+          x2="94"
+          y1={priceY(frame.price)}
+          y2={priceY(frame.price)}
+          stroke="var(--color-primary)"
+          strokeWidth={1.2}
+        />
+      </svg>
+      <input
+        type="range"
+        min={0}
+        max={frames.length - 1}
+        value={index}
+        onChange={(e) => {
+          setPlaying(false);
+          setIndex(Number(e.target.value));
+        }}
+        className="w-full mt-3"
+      />
+    </Card>
+  );
+}
+
+function stopLabel(
+  t: (key: string) => string,
+  stoppedBy: BacktestResult['stoppedBy'],
+): string {
+  if (stoppedBy === 'outside_range') return t('backtest.stopOutside');
+  if (stoppedBy === 'liquidation') return t('backtest.stopLiquidation');
+  if (stoppedBy === 'stop_loss') return t('backtest.stopSl');
+  if (stoppedBy === 'take_profit') return t('backtest.stopTp');
+  return t('backtest.stopNone');
 }
 
 function ResultPanel({
@@ -357,8 +582,34 @@ function ResultPanel({
           label={t('backtest.profitFactor')}
           value={Number.isFinite(result.profitFactor) ? result.profitFactor.toFixed(2) : '∞'}
         />
-        <StatCard label={t('backtest.daysInMarket')} value={`${result.daysInMarket}d`} />
+        <StatCard
+          label={t('backtest.daysInMarket')}
+          value={result.daysInMarket > 0
+            ? `${result.daysInMarket}d · ${Math.max(1, Math.round(result.daysInMarket / 7))}sem`
+            : '0d'}
+        />
         <StatCard label={t('backtest.candlesProcessed')} value={String(result.candlesProcessed)} />
+        <StatCard label={t('backtest.endingEquity')} value={formatUsdCompact(result.endingEquity)} />
+        <StatCard
+          label={t('backtest.roi')}
+          value={
+            <span className={result.roiPct >= 0 ? 'text-success' : 'text-danger'}>
+              {formatPercent(result.roiPct)}
+            </span>
+          }
+        />
+        <StatCard label={t('backtest.fundingPaid')} value={formatPnl(-result.fundingPaid)} />
+        <StatCard label={t('backtest.unrealized')} value={formatPnl(result.unrealizedPnl)} />
+        <StatCard label={t('backtest.buyHold')} value={formatPercent(result.buyHoldPct)} />
+        <StatCard label={t('backtest.timeInRange')} value={formatPercent(result.timeInRangePct)} />
+        <StatCard
+          label={t('backtest.stoppedBy')}
+          value={result.stoppedBy === 'outside_range'
+            ? t('backtest.stopOutside', { price: result.startPrice.toFixed(2) })
+            : stopLabel(t, result.stoppedBy)}
+        />
+        <StatCard label={t('backtest.shifts')} value={String(result.shifts)} />
+        <StatCard label={t('backtest.compounds')} value={String(result.compounds)} />
       </div>
 
       <Card>
@@ -372,6 +623,8 @@ function ResultPanel({
         </div>
         <EquityCurve points={points} height={260} />
       </Card>
+
+      <GridReplay result={result} />
 
       {warnings.length > 0 && (
         <Card className="border-warning/40">

@@ -225,6 +225,15 @@ export interface BacktestInput {
   fee_pct?: number;          // default 0.05 (5 bps maker)
   interval?: CandleInterval; // default 'CI_1_H'
   limit?: number;            // candle count, default 500, max 1000
+  sl_pct?: number;
+  tp_pct?: number;
+  auto_shift_enabled?: boolean;
+  auto_shift_pct?: number;
+  compound_pct?: number;
+  virtual_enabled?: boolean;
+  active_window_size?: number;
+  funding_rate_pct?: number; // signed, percent of notional per 8h
+  days?: number;
 }
 
 export interface BacktestResult {
@@ -238,6 +247,27 @@ export interface BacktestResult {
   daysInMarket: number;
   profitFactor: number;
   candlesProcessed: number;
+  endingEquity: number;
+  roiPct: number;
+  fundingPaid: number;
+  unrealizedPnl: number;
+  buyHoldPct: number;
+  timeInRangePct: number;
+  stoppedBy: 'none' | 'outside_range' | 'liquidation' | 'stop_loss' | 'take_profit';
+  shifts: number;
+  compounds: number;
+  liquidated: boolean;
+  frames: Array<{
+    time: number;
+    price: number;
+    equity: number;
+    position: number;
+    lower: number;
+    upper: number;
+  }>;
+  interval?: string;
+  days?: number;
+  startPrice: number;
 }
 
 export interface OrderRow {
