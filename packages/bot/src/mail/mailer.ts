@@ -68,6 +68,7 @@ async function sendMail(params: OutboundEmail & { to: string }): Promise<boolean
 export interface PasswordResetEmail {
   to: string;
   resetUrl: string;
+  resetCode: string;
   expiresInMinutes: number;
   lang?: 'es' | 'en';
 }
@@ -82,12 +83,13 @@ export function buildPasswordResetEmail(params: PasswordResetEmail): OutboundEma
       heading: 'Restablecé la contraseña de tu cuenta',
       paragraphs: [
         `Recibimos una solicitud para elegir una contraseña nueva en la cuenta ${params.to}.`,
-        `El enlace de abajo vence en ${minutes} minutos y se puede usar una sola vez. Si pedís otro restablecimiento, este deja de servir.`,
-        'Si no pediste el cambio, no abras el enlace. La contraseña actual sigue igual y nadie entra a la cuenta con este correo.',
+        `El código de un solo uso vence en ${minutes} minutos. Pegalo en la página de restablecimiento. Si pedís otro, este deja de servir.`,
+        `Código: ${params.resetCode}`,
+        'Si no pediste el cambio, ignorá este correo. La contraseña actual sigue igual.',
       ],
-      cta: { label: 'Elegir una contraseña nueva', href: params.resetUrl },
+      cta: { label: 'Abrir la página de restablecimiento', href: params.resetUrl },
       notes: [
-        'Si el botón no abre, copiá la dirección completa y pegala en el navegador. La dirección incluye un token de un solo uso: no la reenvíes.',
+        'La página no incluye el código en la dirección. Copiá el código del correo y pegalo en el formulario. No reenvíes el código.',
       ],
       footer: `Toro envió este correo a ${params.to} porque alguien pidió restablecer la contraseña de esa cuenta.`,
     });
@@ -98,12 +100,13 @@ export function buildPasswordResetEmail(params: PasswordResetEmail): OutboundEma
     heading: 'Reset the password for your account',
     paragraphs: [
       `We received a request to choose a new password for ${params.to}.`,
-      `The link below expires in ${minutes} minutes and can be used only once. A newer reset request cancels this one.`,
-      'If you did not ask for this, do not open the link. Your current password stays the same.',
+      `The single-use code expires in ${minutes} minutes. Paste it on the reset page. A newer request cancels this one.`,
+      `Code: ${params.resetCode}`,
+      'If you did not ask for this, ignore this email. Your current password stays the same.',
     ],
-    cta: { label: 'Choose a new password', href: params.resetUrl },
+    cta: { label: 'Open the reset page', href: params.resetUrl },
     notes: [
-      'If the button does not open, copy the full address into your browser. It contains a single-use token: do not forward it.',
+      'The page address does not include the code. Copy the code from this email into the form. Do not forward the code.',
     ],
     footer: `Toro sent this email to ${params.to} because someone asked to reset the password for that account.`,
   });

@@ -1860,6 +1860,7 @@ export class GridBotDB {
     email_verified: number;
     is_admin: number;
     google_sub: string | null;
+    token_version?: number;
     created_at: number;
     last_login_at: number | null;
     display_name?: string | null;
@@ -1948,20 +1949,91 @@ export class GridBotDB {
 
   async linkGoogleSub(userId: UserId, sub: string): Promise<void> {
     await this.dbRun(
-      `UPDATE users SET google_sub = ?, email_verified = 1 WHERE id = ?`,
+      `UPDATE users SET google_sub = ? WHERE id = ? AND email_verified = 1`,
       [sub, userId]
     );
+  }
+
+  async deleteUnverifiedUser(userId: UserId): Promise<void> {
+    await this.dbRun(
+      `DELETE FROM users WHERE id = ? AND email_verified = 0`,
+      [userId]
+    );
+  }
+
+  async bumpTokenVersion(userId: UserId): Promise<number> {
+    const row = await this.dbGet(
+      `UPDATE users SET token_version = token_version + 1 WHERE id = ? RETURNING token_version`,
+      [userId]
+    );
+    await this.revokeAllRefreshTokensForUser(userId);
+    return row?.token_version ?? 1;
+  }
+
+  async commitPasswordChange(userId: UserId, passwordHash: string): Promise<number> {
+    return this.db.transaction(async (tx) => {
+      const row = await tx.get<{ token_version: number }>(
+        `UPDATE users SET password_hash = ?, token_version = token_version + 1
+         WHERE id = ? RETURNING token_version`,
+        [passwordHash, userId]
+      );
+      await tx.run(
+        `UPDATE refresh_tokens SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL`,
+        [Date.now(), userId]
+      );
+      return row?.token_version ?? 1;
+    });
   }
 
   async insertRefreshToken(params: {
     user_id: UserId;
     token_hash: string;
     expires_at: number;
+    family_id: string;
   }): Promise<void> {
     await this.dbRun(
-      `INSERT INTO refresh_tokens (user_id, token_hash, expires_at, created_at) VALUES (?, ?, ?, ?)`,
-      [params.user_id, params.token_hash, params.expires_at, Date.now()]
+      `INSERT INTO refresh_tokens (user_id, token_hash, expires_at, created_at, family_id) VALUES (?, ?, ?, ?, ?)`,
+      [params.user_id, params.token_hash, params.expires_at, Date.now(), params.family_id]
     );
+  }
+
+  async rotateRefreshToken(params: {
+    old_hash: string;
+    new_hash: string;
+    user_id: UserId;
+    expires_at: number;
+  }): Promise<'ok' | 'reused' | 'invalid'> {
+    return this.db.transaction(async (tx) => {
+      const row = await tx.get<{
+        id: number;
+        user_id: UserId;
+        family_id: string;
+        revoked_at: number | null;
+        expires_at: number;
+      }>(
+        `SELECT id, user_id, family_id, revoked_at, expires_at
+         FROM refresh_tokens WHERE token_hash = ? FOR UPDATE`,
+        [params.old_hash]
+      );
+      if (!row || row.user_id !== params.user_id) return 'invalid';
+      if (row.revoked_at || row.expires_at < Date.now()) {
+        await tx.run(
+          `UPDATE refresh_tokens SET revoked_at = ? WHERE user_id = ? AND family_id = ? AND revoked_at IS NULL`,
+          [Date.now(), row.user_id, row.family_id]
+        );
+        return 'reused';
+      }
+      await tx.run(
+        `UPDATE refresh_tokens SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL`,
+        [Date.now(), row.id]
+      );
+      await tx.run(
+        `INSERT INTO refresh_tokens (user_id, token_hash, expires_at, created_at, family_id)
+         VALUES (?, ?, ?, ?, ?)`,
+        [params.user_id, params.new_hash, params.expires_at, Date.now(), row.family_id]
+      );
+      return 'ok';
+    });
   }
 
   async findRefreshToken(tokenHash: string): Promise<{
@@ -2011,10 +2083,7 @@ export class GridBotDB {
   }
 
   async updateUserPassword(userId: UserId, password_hash: string): Promise<void> {
-    await this.dbRun(
-      `UPDATE users SET password_hash = ? WHERE id = ?`,
-      [password_hash, userId]
-    );
+    await this.commitPasswordChange(userId, password_hash);
   }
 
   // ─── Email OTP challenges ──────────────────────────────────────
@@ -2087,7 +2156,7 @@ export class GridBotDB {
   ): Promise<void> {
     await this.dbRun(
       `UPDATE email_otp_challenges
-       SET code_hash = ?, expires_at = ?, attempts = 0, created_at = ?
+       SET code_hash = ?, expires_at = ?, created_at = ?
        WHERE id = ? AND consumed_at IS NULL`,
       [code_hash, expires_at, Date.now(), id]
     );

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { api } from '@/lib/api-client';
 import { BrandMark } from '@/components/brand-mark';
@@ -9,9 +9,8 @@ import { LanguageToggle, useT } from '@/i18n';
 
 export function ResetPasswordPage() {
   const t = useT();
-  const [params] = useSearchParams();
   const navigate = useNavigate();
-  const token = params.get('token') ?? '';
+  const [token, setToken] = useState('');
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
   const [pending, setPending] = useState(false);
@@ -36,27 +35,6 @@ export function ResetPasswordPage() {
     }
   }
 
-  if (!token) {
-    return (
-      <div className="min-h-dvh flex items-center justify-center p-4 bg-bg-base">
-        <div className="w-full max-w-sm space-y-4 text-center">
-          <div className="flex justify-end">
-            <LanguageToggle />
-          </div>
-          <h1 className="text-2xl font-bold text-text-primary">
-            {t('auth.resetPassword.invalidToken')}
-          </h1>
-          <p className="text-sm text-text-muted">
-            {t('auth.resetPassword.missingToken')}
-          </p>
-          <Link to="/dashboard/forgot-password" className="text-primary hover:underline text-sm">
-            {t('auth.forgotPassword.sendBtn')}
-          </Link>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div className="min-h-dvh flex items-center justify-center p-4 bg-bg-base">
       <div className="w-full max-w-sm space-y-6">
@@ -74,6 +52,13 @@ export function ResetPasswordPage() {
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
+          <Input
+            label={t('auth.resetPassword.missingToken')}
+            autoComplete="one-time-code"
+            value={token}
+            onChange={(e) => setToken(e.target.value.trim())}
+            disabled={pending}
+          />
           <Input
             label={t('auth.resetPassword.newPassword')}
             type="password"

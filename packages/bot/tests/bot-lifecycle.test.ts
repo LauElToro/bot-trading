@@ -251,7 +251,7 @@ describe('Bot lifecycle (D.1)', () => {
       .set('X-Api-Key', API_KEY);
     expect(res.status).toBe(500);
     expect(res.body.error).toBe('start_failed');
-    expect(res.body.message).toContain('GRVT credentials missing');
+    expect(res.body.message).toBeUndefined();
     // Status didn't flip — the engine threw before mutating the DB.
     expect(db._bots.find((b) => b.id === bot.id)?.status).toBe('paused');
   });

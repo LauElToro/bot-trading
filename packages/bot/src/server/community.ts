@@ -45,8 +45,8 @@ export interface PublishedBotRow {
 const AUTHOR_TOTAL_SEED = 'featured-author-total';
 const HIDDEN_FEATURED_SEED = 'featured-bnb-10x-80';
 
-export function publicName(displayName: string | null | undefined, email: string): string {
-  return identityName(displayName, email);
+export function publicName(displayName: string | null | undefined, opaqueId: string): string {
+  return identityName(displayName, opaqueId);
 }
 
 function avatarStamp(value: number | string | null | undefined): number | null {
@@ -157,7 +157,7 @@ export function toLeaderCard(row: PublishedBotRow, rank: number) {
     isAuthorTotal: row.seed_key === AUTHOR_TOTAL_SEED,
     author: {
       id: row.user_id,
-      name: publicName(row.author_name, row.author_email),
+      name: publicName(row.author_name, row.user_id),
       hasAvatar: row.author_has_avatar === 1 || row.author_has_avatar === true || row.author_has_avatar === '1',
       avatarUpdatedAt: avatarStamp(row.author_avatar_updated_at),
       tags: parseTagList(row.author_tags),

@@ -50,8 +50,10 @@ export interface EncryptedField {
   authTag: string;
 }
 
-export function encrypt(plaintext: string): EncryptedField {
-  const key = getMasterKey();
+export function encryptWithKey(key: Buffer, plaintext: string): EncryptedField {
+  if (key.length !== KEY_LEN) {
+    throw new Error(`encryption key must be ${KEY_LEN} bytes`);
+  }
   const iv = randomBytes(IV_LEN);
   const cipher = createCipheriv(ALGO, key, iv);
   const ct = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
@@ -63,8 +65,14 @@ export function encrypt(plaintext: string): EncryptedField {
   };
 }
 
-export function decrypt(enc: EncryptedField): string {
-  const key = getMasterKey();
+export function encrypt(plaintext: string): EncryptedField {
+  return encryptWithKey(getMasterKey(), plaintext);
+}
+
+export function decryptWithKey(key: Buffer, enc: EncryptedField): string {
+  if (key.length !== KEY_LEN) {
+    throw new Error(`encryption key must be ${KEY_LEN} bytes`);
+  }
   const iv = Buffer.from(enc.iv, 'base64');
   const ct = Buffer.from(enc.ciphertext, 'base64');
   const tag = Buffer.from(enc.authTag, 'base64');
@@ -73,6 +81,20 @@ export function decrypt(enc: EncryptedField): string {
   decipher.setAuthTag(tag);
   const pt = Buffer.concat([decipher.update(ct), decipher.final()]);
   return pt.toString('utf8');
+}
+
+export function decrypt(enc: EncryptedField): string {
+  return decryptWithKey(getMasterKey(), enc);
+}
+
+export function masterKeyFromBase64(encoded: string | undefined, label: string): Buffer {
+  const value = encoded?.trim() ?? '';
+  if (!value) throw new Error(`${label} is required`);
+  const buf = Buffer.from(value, 'base64');
+  if (buf.length !== KEY_LEN) {
+    throw new Error(`${label} must decode to exactly ${KEY_LEN} bytes`);
+  }
+  return buf;
 }
 
 // Convenience: encrypt N fields and return a flat object suitable

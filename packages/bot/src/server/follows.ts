@@ -349,7 +349,7 @@ export async function listAutoCopiers(
       const pnl = roundMoney(Number(row.pnl_usdt) || 0);
       return {
         id: row.id,
-        name: publicName(row.display_name, row.email),
+        name: publicName(row.display_name, row.id),
         hasAvatar: Boolean(row.avatar_url),
         avatarUpdatedAt: row.avatar_updated_at,
         copyInvestmentUsdt: Number(row.copy_investment_usdt) || 0,
@@ -395,7 +395,7 @@ function toFollowRow(row: {
 }): FollowingRow {
   return {
     id: row.id,
-    name: publicName(row.display_name, row.email),
+    name: publicName(row.display_name, row.id),
     hasAvatar: Boolean(row.avatar_url),
     avatarUpdatedAt: row.avatar_updated_at,
     autoCopy: row.auto_copy === 1,
@@ -465,7 +465,7 @@ async function deliverFollowMail(
     [followeeId],
   );
   if (!followee) return 0;
-  const name = publicName(followee.display_name, followee.email);
+  const name = publicName(followee.display_name, followeeId);
   const followers = await db.all<{ follower_id: string; email: string; notify_emails_enabled: number }>(
     `SELECT f.follower_id, u.email, u.notify_emails_enabled
        FROM user_follows f

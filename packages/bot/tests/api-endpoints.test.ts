@@ -177,8 +177,8 @@ describe('GET /api/v2/health (C.6)', () => {
     expect(res.body.status).toBe('ok');
     expect(res.body.checks.db.ok).toBe(true);
     expect(res.body.checks.grvt.ok).toBe(true);
-    expect(res.body.uptime).toBeTypeOf('number');
-    expect(res.body.memory.rss).toBeTypeOf('number');
+    expect(res.body.memory).toBeUndefined();
+    expect(res.body.runningBots).toBeUndefined();
   });
 
   it('returns degraded when GRVT is down', async () => {
@@ -193,7 +193,7 @@ describe('GET /api/v2/health (C.6)', () => {
     expect(res.body.status).toBe('degraded');
     expect(res.body.checks.db.ok).toBe(true);
     expect(res.body.checks.grvt.ok).toBe(false);
-    expect(res.body.checks.grvt.error).toContain('GRVT unreachable');
+    expect(res.body.checks.grvt.error).toBeUndefined();
   });
 });
 
@@ -531,16 +531,15 @@ describe('GET /api/v2/metrics — C-4 gate', () => {
       .get('/api/v2/metrics')
       .set('X-Forwarded-For', '203.0.113.7');
     expect(res.status).toBe(401);
-    expect(res.body.hint).toContain('METRICS_TOKEN');
+    expect(res.body.hint).toBeUndefined();
   });
 
-  it('allows localhost requests when no token is configured', async () => {
+  it('rejects localhost when METRICS_TOKEN is unset', async () => {
     delete process.env.METRICS_TOKEN;
     const { app } = createTestApp();
     const res = await request(app).get('/api/v2/metrics');
-    expect(res.status).toBe(200);
-    expect(res.headers['content-type']).toContain('text/plain');
-    expect(res.text).toContain('grvt_bot_count');
+    expect(res.status).toBe(401);
+    expect(res.body).toEqual({ error: 'unauthorized' });
   });
 
   it('requires a valid token when METRICS_TOKEN is configured', async () => {
@@ -719,6 +718,7 @@ describe('POST /api/v2/auth/verify-otp', () => {
         email_verified: 1,
         is_admin: 0,
         google_sub: null,
+        token_version: 1,
         created_at: Date.now(),
         last_login_at: null,
       }),
@@ -747,6 +747,9 @@ describe('POST /api/v2/auth/verify-otp', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.token).toBeTypeOf('string');
+    expect(res.body.refreshToken).toBeUndefined();
+    expect(res.headers['set-cookie']?.[0]).toContain('toro_refresh=');
+    expect(res.headers['set-cookie']?.[0]).toContain('HttpOnly');
     expect(gridBotDb.consumeEmailOtpChallenge).toHaveBeenCalledWith('a'.repeat(48));
     expect(gridBotDb.markUserEmailVerified).toHaveBeenCalled();
   });
@@ -929,5 +932,89 @@ describe('GET /api/v2/balance — per-user GRVT client', () => {
     expect(grvtClient.getBalance).not.toHaveBeenCalled();
     expect(spy).toHaveBeenCalled();
     spy.mockRestore();
+  });
+});
+
+describe('SEC auth and surface', () => {
+  it('does not reveal that a verified email is already registered', async () => {
+    const hash = await hashPassword('supersecret');
+    const { app, gridBotDb } = createTestApp();
+    (gridBotDb as any).getUserByEmail = vi.fn().mockResolvedValue({
+      id: '11111111-1111-4111-8111-111111111111',
+      email: 'taken@example.com',
+      password_hash: hash,
+      email_verified: 1,
+    });
+    (gridBotDb as any).createUser = vi.fn();
+    (gridBotDb as any).createEmailOtpChallenge = vi.fn();
+
+    const res = await request(app)
+      .post('/api/v2/auth/signup')
+      .send({ email: 'taken@example.com', password: 'otherpass1', referral_code: 'HCAQ5ES' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.requiresOtp).toBe(true);
+    expect(res.body.challengeId).toMatch(/^[a-f0-9]{48}$/);
+    expect(res.body.error).toBeUndefined();
+    expect((gridBotDb as any).createUser).not.toHaveBeenCalled();
+    expect((gridBotDb as any).createEmailOtpChallenge).not.toHaveBeenCalled();
+  });
+
+  it('reset password revokes sessions through updateUserPassword', async () => {
+    const { app, gridBotDb } = createTestApp();
+    (gridBotDb as any).findValidPasswordResetToken = vi.fn().mockResolvedValue({
+      id: 7,
+      user_id: '11111111-1111-4111-8111-111111111111',
+      expires_at: Date.now() + 60_000,
+    });
+    (gridBotDb as any).updateUserPassword = vi.fn().mockResolvedValue(undefined);
+    (gridBotDb as any).markPasswordResetTokenUsed = vi.fn().mockResolvedValue(undefined);
+    (gridBotDb as any).invalidateOpenPasswordResetTokensForUser = vi.fn().mockResolvedValue(undefined);
+
+    const res = await request(app)
+      .post('/api/v2/auth/reset-password')
+      .send({ token: 'a'.repeat(64), new_password: 'new-password' });
+
+    expect(res.status).toBe(200);
+    expect((gridBotDb as any).updateUserPassword).toHaveBeenCalled();
+  });
+
+  it('reused refresh cookie is rejected and cleared', async () => {
+    const { signRefreshToken } = await import('../src/auth/jwt.js');
+    const refresh = signRefreshToken('11111111-1111-4111-8111-111111111111');
+    const { app, gridBotDb } = createTestApp();
+    (gridBotDb as any).getUserById = vi.fn().mockResolvedValue({
+      id: '11111111-1111-4111-8111-111111111111',
+      email: 'user@example.com',
+      is_admin: 0,
+      token_version: 1,
+    });
+    (gridBotDb as any).rotateRefreshToken = vi.fn().mockResolvedValue('reused');
+
+    const res = await request(app)
+      .post('/api/v2/auth/refresh')
+      .set('Cookie', `toro_refresh=${encodeURIComponent(refresh)}`);
+
+    expect(res.status).toBe(401);
+    expect(res.headers['set-cookie']?.[0]).toContain('Max-Age=0');
+    expect((gridBotDb as any).rotateRefreshToken).toHaveBeenCalled();
+  });
+
+  it('manual trade is not a routed endpoint', async () => {
+    const { app } = createTestApp();
+    const res = await request(app)
+      .post('/api/v2/admin/manual-trade')
+      .set('X-Api-Key', API_KEY)
+      .send({ botId: 1, side: 'buy', size: 1 });
+    expect(res.status).toBe(404);
+  });
+
+  it('authenticated health does not include process memory', async () => {
+    const { app } = createTestApp();
+    const res = await request(app).get('/api/v2/health').set('X-Api-Key', API_KEY);
+    expect(res.status).toBe(200);
+    expect(res.body.memory).toBeUndefined();
+    expect(res.body.runningBots).toBeUndefined();
+    expect(res.body.checks.db.error).toBeUndefined();
   });
 });

@@ -42,36 +42,30 @@ export const REFRESH_TOKEN_KEY = 'grvt-grid-refresh';
 // var so the request() helper reads the current value on every call
 // without needing React context.
 let jwtToken: string | null = null;
-let refreshToken: string | null = null;
 let refreshInFlight: Promise<boolean> | null = null;
 
 export function setAuthToken(token: string) { jwtToken = token; }
 export function clearAuthToken() {
   jwtToken = null;
-  refreshToken = null;
 }
 export function getAuthToken(): string | null { return jwtToken; }
 
-export function setSessionTokens(access: string, refresh: string) {
+export function setSessionTokens(access: string, _refresh?: string) {
   jwtToken = access;
-  refreshToken = refresh;
-  localStorage.setItem(ACCESS_TOKEN_KEY, access);
-  localStorage.setItem(REFRESH_TOKEN_KEY, refresh);
+  localStorage.removeItem(ACCESS_TOKEN_KEY);
+  localStorage.removeItem(REFRESH_TOKEN_KEY);
 }
 
 export function clearSessionTokens() {
   jwtToken = null;
-  refreshToken = null;
   localStorage.removeItem(ACCESS_TOKEN_KEY);
   localStorage.removeItem(REFRESH_TOKEN_KEY);
 }
 
 export function loadStoredSession(): { access: string | null; refresh: string | null } {
-  const access = localStorage.getItem(ACCESS_TOKEN_KEY);
-  const refresh = localStorage.getItem(REFRESH_TOKEN_KEY);
-  jwtToken = access;
-  refreshToken = refresh;
-  return { access, refresh };
+  localStorage.removeItem(ACCESS_TOKEN_KEY);
+  localStorage.removeItem(REFRESH_TOKEN_KEY);
+  return { access: jwtToken, refresh: null };
 }
 
 interface AuthSession {
@@ -93,24 +87,15 @@ export interface OtpChallenge {
 
 async function persistSession(session: AuthSession): Promise<AuthSession> {
   const access = session.accessToken || session.token;
-  if (session.refreshToken) {
-    setSessionTokens(access, session.refreshToken);
-  } else {
-    setAuthToken(access);
-    localStorage.setItem(ACCESS_TOKEN_KEY, access);
-  }
+  setSessionTokens(access);
   return { ...session, token: access, accessToken: access };
 }
 
 async function tryRefreshSession(): Promise<boolean> {
   if (refreshInFlight) return refreshInFlight;
-  const stored = refreshToken || localStorage.getItem(REFRESH_TOKEN_KEY);
-  if (!stored) return false;
   refreshInFlight = (async () => {
     try {
-      const next = await publicRequest<AuthSession>('/auth/refresh', {
-        refreshToken: stored,
-      });
+      const next = await publicRequest<AuthSession>('/auth/refresh', {});
       await persistSession(next);
       return true;
     } catch {
@@ -137,7 +122,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 
   let response: Response;
   try {
-    response = await fetch(url, { ...init, headers });
+    response = await fetch(url, { ...init, headers, credentials: 'include' });
   } catch (cause) {
     throw new ApiError(0, null, `network error: ${(cause as Error).message}`);
   }
@@ -177,6 +162,7 @@ async function publicRequest<T>(path: string, body: object): Promise<T> {
   const url = `${BASE_URL}/api/v2${path}`;
   const response = await fetch(url, {
     method: 'POST',
+    credentials: 'include',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
     body: JSON.stringify(body),
   });
@@ -460,10 +446,11 @@ export const api = {
       referral_code: extras.referralCode ?? '',
     }).then(persistSession),
 
-  logoutSession: (storedRefresh?: string | null) =>
-    publicRequest<{ ok: true }>('/auth/logout', {
-      refreshToken: storedRefresh || refreshToken || '',
-    }).catch(() => ({ ok: true as const })),
+  refreshSession: () =>
+    publicRequest<AuthSession>('/auth/refresh', {}).then(persistSession),
+
+  logoutSession: (_storedRefresh?: string | null) =>
+    publicRequest<{ ok: true }>('/auth/logout', {}).catch(() => ({ ok: true as const })),
 
   forgotPassword: (email: string, lang: 'es' | 'en' = 'en') =>
     publicRequest<{ ok: true }>('/auth/forgot-password', { email, lang }),

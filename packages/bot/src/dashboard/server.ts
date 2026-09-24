@@ -101,7 +101,7 @@ app.use(
             defaultSrc: ["'self'"],
             scriptSrc: ["'self'", 'https://accounts.google.com'],
             frameSrc: ["'self'", 'https://accounts.google.com'],
-            connectSrc: ["'self'", 'https://accounts.google.com', 'wss:', 'ws:'],
+            connectSrc: ["'self'", 'https://accounts.google.com'],
             imgSrc: [
               "'self'",
               'data:',

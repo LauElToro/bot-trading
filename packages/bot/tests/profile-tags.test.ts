@@ -32,7 +32,10 @@ describe('profile tags', () => {
     expect(handleKey('LauToro', 'LAS')).not.toBe(handleKey('LauToro', 'LA'));
     expect(handleKey('LauToro', 'LAS')).not.toBe(handleKey('LauToroo', 'LAS'));
     expect(identityName('LauToro', 'other@mail.com')).toBe('LauToro');
-    expect(identityName('  ', 'lautoro@mail.com')).toBe('lautoro');
+    const alias = identityName('  ', 'lautoro@mail.com');
+    expect(alias).toMatch(/^Trader [0-9a-f]{4}$/);
+    expect(alias).not.toContain('lautoro');
+    expect(identityName(null, 'user-1')).toMatch(/^Trader [0-9a-f]{4}$/);
   });
 
   it('generates a public tag without an email', () => {

@@ -1,0 +1,12 @@
+# Mail catcher for local development only.
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d mailpit
+# Do not use this file in production. OTP and reset codes must go to a real SMTP host.
+services:
+  mailpit:
+    image: axllent/mailpit
+    container_name: grvt-grid-mailpit
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8025:8025"
+    networks:
+      - toro

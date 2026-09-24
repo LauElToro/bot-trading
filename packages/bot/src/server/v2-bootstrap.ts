@@ -119,7 +119,7 @@ export function mountV2(opts: MountV2Options): V2Handles {
       // Only `bot:<id>` channels are user-scoped. Other channels
       // (`prices`, `notifications`, `system`) are broadcast feeds.
       const m = /^bot:(\d+)$/.exec(channel);
-      if (!m) return true;
+      if (!m) return false;
       const botId = parseInt(m[1]!, 10);
       let row: { user_id: string | null } | undefined;
       try {

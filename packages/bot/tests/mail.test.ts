@@ -49,17 +49,21 @@ describe('transactional emails', () => {
   });
 
   it('includes the reset link, the account, and the expiry', () => {
-    const url = 'https://toro.example/dashboard/reset-password?token=abc123';
+    const url = 'https://toro.example/dashboard/reset-password';
     const mail = buildPasswordResetEmail({
       to: 'ana@example.com',
       resetUrl: url,
+      resetCode: 'abc123token',
       expiresInMinutes: 60,
       lang: 'es',
     });
     expect(mail.text).toContain(url);
+    expect(mail.text).toContain('abc123token');
+    expect(mail.text).not.toContain('?token=');
     expect(mail.text).toContain('ana@example.com');
     expect(mail.text).toContain('60 minutos');
-    expect(mail.html).toContain('https://toro.example/dashboard/reset-password?token=abc123');
+    expect(mail.html).toContain('https://toro.example/dashboard/reset-password');
+    expect(mail.html).not.toContain('?token=');
     expectBrand(mail.html);
   });
 

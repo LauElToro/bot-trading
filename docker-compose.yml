@@ -72,8 +72,6 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      mailpit:
-        condition: service_started
     healthcheck:
       test: ["CMD", "curl", "-fs", "http://127.0.0.1:3848/api/health"]
       interval: 30s
@@ -116,18 +114,6 @@ services:
     depends_on:
       bot:
         condition: service_healthy
-    networks:
-      - toro
-
-  mailpit:
-    image: axllent/mailpit
-    container_name: grvt-grid-mailpit
-    restart: unless-stopped
-    environment:
-      MP_SMTP_AUTH_ACCEPT_ANY: "true"
-      MP_SMTP_AUTH_ALLOW_INSECURE: "true"
-    ports:
-      - "127.0.0.1:8025:8025"
     networks:
       - toro
 

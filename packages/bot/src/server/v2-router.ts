@@ -1,11 +1,11 @@
 import { Router, type Request, type Response, type NextFunction } from 'express';
 import rateLimit from 'express-rate-limit';
-import { createHash, randomBytes, randomInt } from 'node:crypto';
+import { createHash, randomBytes, randomInt, randomUUID, timingSafeEqual } from 'node:crypto';
 import { childLogger } from './logger.js';
 import { cache } from './cache.js';
 import type { GridBotDB } from '../database/db.js';
 import type { QueryExecutor, RunResult } from '../database/postgres.js';
-import { hashPassword, verifyPassword } from '../auth/passwords.js';
+import { hashPassword, passwordIssue, verifyPassword, verifyPasswordOrDummy } from '../auth/passwords.js';
 import {
   signTokenPair,
   verifyToken,
@@ -252,6 +252,11 @@ function makeAuthMiddleware(apiKey: string, gridBotDb: GridBotDB) {
       if (m) {
         const payload = verifyToken(m[1]!);
         if (payload) {
+          const user = await gridBotDb.getUserById(payload.userId);
+          if (!user || (user.token_version ?? 1) !== payload.tv) {
+            log.warn({ ip: req.ip, path: req.path }, 'rejected v2 request: token version mismatch');
+            return res.status(401).json({ error: 'invalid or expired token' });
+          }
           req.userId = payload.userId;
           return next();
         }
@@ -331,10 +336,11 @@ function asyncHandler(fn: AsyncHandler) {
     Promise.resolve(fn(req, res)).catch((err: Error & { status?: number }) => {
       if (res.headersSent) return next(err);
       const status = err.status && err.status >= 400 && err.status < 600 ? err.status : 500;
-      res.status(status).json({
-        error: status === 500 ? 'internal_error' : err.message || 'request failed',
-        message: err.message,
-      });
+      res.status(status).json(
+        status === 500
+          ? { error: 'internal_error' }
+          : { error: err.message || 'request failed' },
+      );
     });
   };
 }
@@ -371,30 +377,63 @@ function respondLifecycleError(
     res.status(422).json({
       error: 'grvt_credentials_invalid',
       code: 'grvt_credentials_invalid',
-      userId,
-      message,
     });
     return;
   }
-  res.status(500).json({ error: defaultErrorCode, message });
+  res.status(500).json({ error: defaultErrorCode });
+}
+
+const REFRESH_COOKIE = 'toro_refresh';
+
+function clientIp(req: Request): string | null {
+  return req.ip || null;
+}
+
+function refreshCookie(token: string, maxAgeSeconds: number): string {
+  const secure = process.env.NODE_ENV === 'production' ? '; Secure' : '';
+  return `${REFRESH_COOKIE}=${encodeURIComponent(token)}; HttpOnly; SameSite=Strict; Path=/api/v2/auth; Max-Age=${maxAgeSeconds}${secure}`;
+}
+
+function clearRefreshCookie(): string {
+  const secure = process.env.NODE_ENV === 'production' ? '; Secure' : '';
+  return `${REFRESH_COOKIE}=; HttpOnly; SameSite=Strict; Path=/api/v2/auth; Max-Age=0${secure}`;
+}
+
+function readRefreshCookie(req: Request): string {
+  const raw = req.header('cookie') ?? '';
+  for (const part of raw.split(';')) {
+    const [name, ...rest] = part.trim().split('=');
+    if (name === REFRESH_COOKIE) return decodeURIComponent(rest.join('='));
+  }
+  return '';
+}
+
+function tokensEqual(provided: string, required: string): boolean {
+  const left = Buffer.from(provided);
+  const right = Buffer.from(required);
+  if (left.length !== right.length || left.length === 0) return false;
+  return timingSafeEqual(left, right);
 }
 
 async function issueSession(
   gridBotDb: GridBotDB,
+  res: Response,
   userId: UserId,
   isAdmin: boolean,
   hasGrvtCreds: boolean
 ) {
-  const pair = signTokenPair(userId);
+  const user = await gridBotDb.getUserById(userId);
+  const pair = signTokenPair(userId, user?.token_version ?? 1);
   await gridBotDb.insertRefreshToken({
     user_id: userId,
     token_hash: hashRefreshToken(pair.refreshToken),
     expires_at: Date.now() + refreshTtlSeconds() * 1000,
+    family_id: randomUUID(),
   });
+  res.setHeader('Set-Cookie', refreshCookie(pair.refreshToken, refreshTtlSeconds()));
   return {
     token: pair.accessToken,
     accessToken: pair.accessToken,
-    refreshToken: pair.refreshToken,
     expiresIn: pair.expiresIn,
     userId,
     isAdmin,
@@ -438,6 +477,27 @@ function makeAuthLimiter(maxPerWindow: number, windowMs: number) {
 // 5 attempts per 15 min — covers normal "I fat-fingered my password 3 times"
 // without locking out, but a 1000-password dictionary attack needs ~50 hours.
 const LOGIN_LIMITER = makeAuthLimiter(5, 15 * 60 * 1000);
+const EMAIL_LOGIN_LIMITER = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 5,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  skip: () => process.env.NODE_ENV === 'test' || process.env.DISABLE_RATE_LIMIT === '1',
+  keyGenerator: (req) => {
+    const email = String((req.body as { email?: unknown } | undefined)?.email ?? '')
+      .trim()
+      .toLowerCase();
+    return `email:${email || 'missing'}`;
+  },
+  validate: { keyGeneratorIpFallback: false },
+  handler: (req, res) => {
+    log.warn({ ip: req.ip, path: req.path }, 'rate limit exceeded on auth endpoint');
+    res.status(429).json({
+      error: 'too_many_requests',
+      message: 'Too many attempts from this IP. Try again in a few minutes.',
+    });
+  },
+});
 // Signup: 3 per hour. Stops a single IP from spinning up dozens of accounts.
 const SIGNUP_LIMITER = makeAuthLimiter(3, 60 * 60 * 1000);
 // Password reset: 3 per hour. Stops email-bombing a known address. Stricter
@@ -497,10 +557,7 @@ export function createV2Router(deps: V2RouterDeps): Router {
     const challengeId = randomBytes(24).toString('hex');
     const codeHash = await hashPassword(code);
     const expiresAt = Date.now() + OTP_TTL_MS;
-    const ipAddress =
-      (params.req.headers['x-forwarded-for'] as string | undefined)?.split(',')[0]?.trim() ||
-      params.req.ip ||
-      null;
+    const ipAddress = clientIp(params.req);
     await gridBotDb.createEmailOtpChallenge({
       id: challengeId,
       user_id: params.userId,
@@ -708,8 +765,12 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       return res.status(400).json({ error: 'invalid email' });
     }
-    if (password.length < 8) {
+    const passwordProblem = passwordIssue(password);
+    if (passwordProblem === 'too_short') {
       return res.status(400).json({ error: 'password too short (min 8 chars)' });
+    }
+    if (passwordProblem === 'too_long') {
+      return res.status(400).json({ error: 'password too long (max 72 bytes)' });
     }
     if (referralCode !== REQUIRED_GRVT_REFERRAL_CODE) {
       return res.status(400).json({
@@ -722,14 +783,15 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
     }
     const existing = await gridBotDb.getUserByEmail(email);
     if (existing) {
-      if (existing.email_verified) {
-        return res.status(409).json({ error: 'email already registered' });
-      }
-      const passwordMatches = existing.password_hash
-        ? await verifyPassword(password, existing.password_hash)
-        : false;
-      if (!passwordMatches) {
-        return res.status(409).json({ error: 'email already registered' });
+      const passwordMatches = await verifyPasswordOrDummy(password, existing.password_hash);
+      if (existing.email_verified || !passwordMatches) {
+        res.json({
+          requiresOtp: true,
+          challengeId: randomBytes(24).toString('hex'),
+          emailHint: maskEmail(email),
+          expiresIn: OTP_TTL_MS / 1000,
+        });
+        return;
       }
       res.json(await issueEmailOtp({
         userId: existing.id,
@@ -762,10 +824,7 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
       email_verified: false,
       accepted_referral_link: true,
     });
-    const ipAddress =
-      (req.headers['x-forwarded-for'] as string | undefined)?.split(',')[0]?.trim() ||
-      req.ip ||
-      null;
+    const ipAddress = clientIp(req);
     const userAgent = req.header('user-agent') || null;
     await gridBotDb.insertTermsAcceptance({
       user_id: userId,
@@ -789,7 +848,7 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
   }));
 
   // POST /api/v2/auth/login — public.
-  router.post('/auth/login', LOGIN_LIMITER, asyncHandler(async (req, res) => {
+  router.post('/auth/login', LOGIN_LIMITER, EMAIL_LOGIN_LIMITER, asyncHandler(async (req, res) => {
     const body = (req.body ?? {}) as {
       email?: unknown;
       password?: unknown;
@@ -798,14 +857,8 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
     const email = String(body.email ?? '').trim().toLowerCase();
     const password = String(body.password ?? '');
     const user = await gridBotDb.getUserByEmail(email);
-    if (!user) {
-      return res.status(401).json({ error: 'invalid email or password' });
-    }
-    if (!user.password_hash) {
-      return res.status(401).json({ error: 'invalid email or password' });
-    }
-    const ok = await verifyPassword(password, user.password_hash);
-    if (!ok) {
+    const ok = await verifyPasswordOrDummy(password, user?.password_hash);
+    if (!user || !ok) {
       return res.status(401).json({ error: 'invalid email or password' });
     }
     if (!isMailerConfigured()) {
@@ -865,7 +918,7 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
       });
     }
     log.info({ userId: user.id, purpose: challenge.purpose }, 'email OTP verified');
-    res.json(await issueSession(gridBotDb, user.id, !!user.is_admin, hasGrvtCreds));
+    res.json(await issueSession(gridBotDb, res, user.id, !!user.is_admin, hasGrvtCreds));
     return;
   }));
 
@@ -935,10 +988,13 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
 
     let user = await gridBotDb.getUserByGoogleSub(identity.sub);
     if (!user) {
-      user = await gridBotDb.getUserByEmail(identity.email);
-      if (user) {
-        await gridBotDb.linkGoogleSub(user.id, identity.sub);
-        user = { ...user, google_sub: identity.sub };
+      const byEmail = await gridBotDb.getUserByEmail(identity.email);
+      if (byEmail && !byEmail.email_verified) {
+        await gridBotDb.deleteUnverifiedUser(byEmail.id);
+      } else if (byEmail?.email_verified) {
+        await gridBotDb.linkGoogleSub(byEmail.id, identity.sub);
+        await gridBotDb.bumpTokenVersion(byEmail.id);
+        user = await gridBotDb.getUserById(byEmail.id);
       }
     }
 
@@ -973,10 +1029,7 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
         email_verified: true,
         accepted_referral_link: true,
       });
-      const ipAddress =
-        (req.headers['x-forwarded-for'] as string | undefined)?.split(',')[0]?.trim() ||
-        req.ip ||
-        null;
+      const ipAddress = clientIp(req);
       const userAgent = req.header('user-agent') || null;
       await gridBotDb.insertTermsAcceptance({
         user_id: userId,
@@ -992,37 +1045,49 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
       sendWelcomeEmail(identity.email, tosLang).catch((err) => {
         log.warn({ err, userId }, 'welcome email failed');
       });
-      res.json(await issueSession(gridBotDb, userId, isAdmin, false));
+      res.json(await issueSession(gridBotDb, res, userId, isAdmin, false));
       return;
     }
 
     await gridBotDb.updateUserLastLogin(user.id);
     const hasGrvtCreds = await gridBotDb.hasGrvtCredentials(user.id);
     log.info({ userId: user.id, email: user.email }, 'user logged in via google');
-    res.json(await issueSession(gridBotDb, user.id, !!user.is_admin, hasGrvtCreds));
+    res.json(await issueSession(gridBotDb, res, user.id, !!user.is_admin, hasGrvtCreds));
     return;
   }));
 
-  // POST /api/v2/auth/refresh — public. Rotates the refresh token.
+  // POST /api/v2/auth/refresh — public. Rotates the refresh cookie.
   router.post('/auth/refresh', LOGIN_LIMITER, asyncHandler(async (req, res) => {
-    const body = (req.body ?? {}) as { refreshToken?: unknown };
-    const refreshToken = String(body.refreshToken ?? '').trim();
+    const refreshToken = readRefreshCookie(req);
     const payload = refreshToken ? verifyRefreshToken(refreshToken) : null;
     if (!payload) {
       return res.status(401).json({ error: 'invalid or expired refresh token' });
     }
-    const tokenHash = hashRefreshToken(refreshToken);
-    const row = await gridBotDb.findRefreshToken(tokenHash);
-    if (!row || row.revoked_at || row.expires_at < Date.now() || row.user_id !== payload.userId) {
-      return res.status(401).json({ error: 'invalid or expired refresh token' });
-    }
-    await gridBotDb.revokeRefreshToken(tokenHash);
     const user = await gridBotDb.getUserById(payload.userId);
     if (!user) {
       return res.status(401).json({ error: 'invalid or expired refresh token' });
     }
+    const pair = signTokenPair(user.id, user.token_version ?? 1);
+    const rotated = await gridBotDb.rotateRefreshToken({
+      old_hash: hashRefreshToken(refreshToken),
+      new_hash: hashRefreshToken(pair.refreshToken),
+      user_id: payload.userId,
+      expires_at: Date.now() + refreshTtlSeconds() * 1000,
+    });
+    if (rotated !== 'ok') {
+      res.setHeader('Set-Cookie', clearRefreshCookie());
+      return res.status(401).json({ error: 'invalid or expired refresh token' });
+    }
     const hasGrvtCreds = await gridBotDb.hasGrvtCredentials(user.id);
-    res.json(await issueSession(gridBotDb, user.id, !!user.is_admin, hasGrvtCreds));
+    res.setHeader('Set-Cookie', refreshCookie(pair.refreshToken, refreshTtlSeconds()));
+    res.json({
+      token: pair.accessToken,
+      accessToken: pair.accessToken,
+      expiresIn: pair.expiresIn,
+      userId: user.id,
+      isAdmin: !!user.is_admin,
+      hasGrvtCreds,
+    });
     return;
   }));
 
@@ -1030,11 +1095,13 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
   // refreshToken in the body. Missing/invalid tokens still return 200
   // so the client can always clear local state.
   router.post('/auth/logout', asyncHandler(async (req, res) => {
-    const body = (req.body ?? {}) as { refreshToken?: unknown };
-    const refreshToken = String(body.refreshToken ?? '').trim();
+    const refreshToken = readRefreshCookie(req);
     if (refreshToken) {
-      await gridBotDb.revokeRefreshToken(hashRefreshToken(refreshToken));
+      const payload = verifyRefreshToken(refreshToken);
+      if (payload) await gridBotDb.bumpTokenVersion(payload.userId);
+      else await gridBotDb.revokeRefreshToken(hashRefreshToken(refreshToken));
     }
+    res.setHeader('Set-Cookie', clearRefreshCookie());
     res.json({ ok: true });
     return;
   }));
@@ -1125,10 +1192,7 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
     const rawToken = randomBytes(32).toString('hex');
     const tokenHash = createHash('sha256').update(rawToken).digest('hex');
     const expiresAt = Date.now() + RESET_TOKEN_TTL_MS;
-    const ipAddress =
-      (req.headers['x-forwarded-for'] as string | undefined)?.split(',')[0]?.trim() ||
-      req.ip ||
-      null;
+    const ipAddress = clientIp(req);
     // SECURITY: never derive the reset URL from the request's Host header.
     // An attacker can spoof Host and trick the email link into pointing at
     // their server, leaking the raw token when the victim clicks. Require
@@ -1149,11 +1213,12 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
       expires_at: expiresAt,
       ip_address: ipAddress,
     });
-    const resetUrl = `${baseUrl}/dashboard/reset-password?token=${rawToken}`;
+    const resetUrl = `${baseUrl}/dashboard/reset-password`;
     try {
       await sendPasswordResetEmail({
         to: user.email,
         resetUrl,
+        resetCode: rawToken,
         expiresInMinutes: RESET_TOKEN_TTL_MIN,
         lang: body.lang === 'es' ? 'es' : 'en',
       });
@@ -1175,8 +1240,12 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
     if (!token || token.length < 32) {
       return res.status(400).json({ error: 'invalid token' });
     }
-    if (newPassword.length < 8) {
+    const passwordProblem = passwordIssue(newPassword);
+    if (passwordProblem === 'too_short') {
       return res.status(400).json({ error: 'password too short (min 8 chars)' });
+    }
+    if (passwordProblem === 'too_long') {
+      return res.status(400).json({ error: 'password too long (max 72 bytes)' });
     }
     const tokenHash = createHash('sha256').update(token).digest('hex');
     const row = await gridBotDb.findValidPasswordResetToken(tokenHash);
@@ -1195,27 +1264,12 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
   }));
 
   router.get('/metrics', (req: Request, res: Response, next: NextFunction) => {
-    const required = process.env.METRICS_TOKEN?.trim();
-    if (required && required.length >= 16) {
-      const header = req.header('authorization') || '';
-      const bearer = /^Bearer\s+(.+)$/i.exec(header)?.[1];
-      if (bearer && bearer === required) return next();
-      log.warn({ ip: req.ip, path: req.path }, 'rejected /metrics request: missing/invalid token');
-      res.status(401).json({ error: 'unauthorized' });
-      return;
-    }
-    const remote = req.ip || req.socket.remoteAddress || '';
-    const isLocalhost =
-      remote === '127.0.0.1' || remote === '::1' || remote === '::ffff:127.0.0.1';
-    if (isLocalhost) return next();
-    log.warn(
-      { ip: remote, path: req.path },
-      'rejected /metrics request from non-localhost (set METRICS_TOKEN to allow remote scrapers)'
-    );
-    res.status(401).json({
-      error: 'unauthorized',
-      hint: 'set METRICS_TOKEN (min 16 chars) on the bot and pass it as Authorization: Bearer <token>, or scrape from localhost',
-    });
+    const required = process.env.METRICS_TOKEN?.trim() ?? '';
+    const header = req.header('authorization') || '';
+    const bearer = /^Bearer\s+(.+)$/i.exec(header)?.[1] ?? '';
+    if (required.length >= 32 && tokensEqual(bearer, required)) return next();
+    log.warn({ ip: req.ip, path: req.path }, 'rejected /metrics request');
+    res.status(401).json({ error: 'unauthorized' });
     return;
   }, asyncHandler(async (_req, res) => {
     const bots = await dbAll<{
@@ -1497,7 +1551,6 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
         return res.status(400).json({
           error: 'credential_test_failed',
           stage: 'login',
-          message: 'GRVT login failed — check apiKey and apiSecret',
         });
       }
       // Authenticated round-trip — validates accountId/subAccountId too.
@@ -1510,7 +1563,6 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
       return res.status(400).json({
         error: 'credential_test_failed',
         stage: 'account_summary',
-        message: `GRVT API call failed: ${msg}`,
       });
     }
 
@@ -1548,10 +1600,7 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
       res.json({ ok: true, equity: testEquity });
     } catch (err) {
       log.error({ userId, err: (err as Error).message }, 'failed to save GRVT credentials');
-      res.status(500).json({
-        error: 'save_failed',
-        message: (err as Error).message,
-      });
+      res.status(500).json({ error: 'save_failed' });
     }
     return;
   }));
@@ -1653,7 +1702,6 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
         return res.status(400).json({
           error: 'credential_test_failed',
           stage: 'login',
-          message: 'GRVT login failed — check apiKey and apiSecret',
         });
       }
       const balance = await testClient.getBalance() as { total_equity?: string };
@@ -1664,7 +1712,6 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
       return res.status(400).json({
         error: 'credential_test_failed',
         stage: 'account_summary',
-        message: `GRVT API call failed: ${msg}`,
       });
     }
 
@@ -1686,10 +1733,7 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
         { userId, err: (err as Error).message },
         'failed to save GRVT sub-account'
       );
-      res.status(500).json({
-        error: 'save_failed',
-        message: (err as Error).message,
-      });
+      res.status(500).json({ error: 'save_failed' });
     }
     return;
   }));
@@ -1818,9 +1862,8 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
     if (!userId) return res.status(400).json({ error: 'invalid user' });
     const user = await gridBotDb.getUserById(userId);
     if (!user) return res.status(404).json({ error: 'user not found' });
-    const [profile, account, tags] = await Promise.all([
+    const [profile, tags] = await Promise.all([
       loadTraderProfile(db, userId),
-      loadAccountPerformance(db, userId, () => fetchUserAccountSlices(userId, gridBotDb)),
       ensureUserTags(db, userId),
     ]);
     const follow = req.userId ? await getFollowState(db, req.userId, userId) : {
@@ -1830,14 +1873,12 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
     };
     res.json({
       ...profile,
-      account,
-      equity: account.points,
       id: user.id,
       hasAvatar: Boolean(user.avatar_url),
       avatarUpdatedAt: user.avatar_updated_at ?? null,
       memberSince: user.created_at,
       tags,
-      name: publicName(user.display_name, user.email),
+      name: publicName(user.display_name, user.id),
       bio: user.bio?.trim() || null,
       follow,
     });
@@ -2342,117 +2383,6 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
     return;
   }));
 
-  // ── POST /api/v2/admin/manual-trade ───────────────────────────────
-  // Operator escape hatch for one-off position adjustments OUTSIDE the
-  // grid logic. Used when the bot's auto-purchase or compound logic
-  // got the position wrong and needs a manual correction. Body:
-  //   { botId: number, side: 'buy' | 'sell', size: number, slippagePct?: number }
-  //
-  // Safety guards:
-  //   - X-Api-Key required (router middleware)
-  //   - hard cap on size (5 ETH max — refuses larger orders)
-  //   - aggressive limit price (0.5% from mark by default), GTC
-  //   - bot must exist
-  //   - returns the GRVT order_id for verification
-  //
-  // The order is placed independently of the grid — it does NOT touch
-  // grid_levels, the engine's monitor will not interfere because it
-  // only manages levels (this is just a position adjustment).
-  router.post('/admin/manual-trade', asyncHandler(async (req, res) => {
-    // Admin only.
-    const me = await gridBotDb.getUserById(req.userId!);
-    if (!me?.is_admin) {
-      return res.status(403).json({ error: 'admin required' });
-    }
-    const body = (req.body ?? {}) as {
-      botId?: unknown;
-      side?: unknown;
-      size?: unknown;
-      slippagePct?: unknown;
-    };
-    const botId = parseInt(String(body.botId ?? ''), 10);
-    const side = String(body.side ?? '');
-    const size = parseFloat(String(body.size ?? ''));
-    const slippagePct = parseFloat(String(body.slippagePct ?? '0.5'));
-
-    if (!Number.isFinite(botId) || botId <= 0) {
-      return res.status(400).json({ error: 'invalid_body', message: 'botId required' });
-    }
-    if (side !== 'buy' && side !== 'sell') {
-      return res.status(400).json({ error: 'invalid_body', message: "side must be 'buy' or 'sell'" });
-    }
-    if (!Number.isFinite(size) || size <= 0) {
-      return res.status(400).json({ error: 'invalid_body', message: 'size must be a positive number' });
-    }
-    if (size > 5) {
-      return res.status(400).json({ error: 'safety_cap', message: 'manual-trade size cap is 5 (refused for safety)' });
-    }
-    if (!Number.isFinite(slippagePct) || slippagePct <= 0 || slippagePct > 5) {
-      return res.status(400).json({ error: 'invalid_body', message: 'slippagePct must be in (0, 5]' });
-    }
-
-    const bot = await dbGet<{ id: number; pair: string }>(db, `
-      SELECT id, pair FROM grid_bots WHERE id = ?
-    `, [botId]);
-    if (!bot) return res.status(404).json({ error: 'bot not found' });
-
-    // Aggressive limit pricing — same pattern the engine's closeBot uses
-    // (0.5% on the worse side of market, GTC, executes ~immediately).
-    const ticker = await (grvtClient as unknown as { getTicker(p: string): Promise<{ last_price: string }> }).getTicker(bot.pair);
-    const lastPrice = parseFloat(ticker.last_price);
-    if (!Number.isFinite(lastPrice) || lastPrice <= 0) {
-      return res.status(502).json({ error: 'ticker_unavailable' });
-    }
-
-    const slip = slippagePct / 100;
-    const aggressivePrice =
-      side === 'sell'
-        ? Math.floor(lastPrice * (1 - slip) * 100) / 100  // 0.5% below
-        : Math.ceil(lastPrice * (1 + slip) * 100) / 100;  // 0.5% above
-
-    const subAccountId = process.env.GRVT_TRADING_ACCOUNT_ID;
-    if (!subAccountId) {
-      return res.status(500).json({ error: 'sub_account_id_missing' });
-    }
-
-    log.warn(
-      { botId, side, size, lastPrice, aggressivePrice },
-      'admin manual-trade requested'
-    );
-
-    try {
-      const order = await (grvtClient as unknown as {
-        createOrder(p: Record<string, unknown>, allowMarket?: boolean): Promise<{ order_id: string }>;
-      }).createOrder({
-        sub_account_id: subAccountId,
-        instrument: bot.pair,
-        size: (Math.floor(size * 10000) / 10000).toString(),
-        price: aggressivePrice.toString(),
-        side,
-        type: 'limit',
-        time_in_force: 'gtc',
-        metadata: `manual_trade_admin_${Date.now()}`,
-      }, true);
-
-      log.warn({ botId, orderId: order.order_id }, 'admin manual-trade order placed');
-      res.json({
-        ok: true,
-        botId,
-        side,
-        size,
-        lastPrice,
-        aggressivePrice,
-        orderId: order.order_id,
-      });
-    } catch (err) {
-      log.error({ botId, err: (err as Error).message }, 'admin manual-trade failed');
-      res.status(500).json({
-        error: 'order_failed',
-        message: (err as Error).message,
-      });
-    }
-    return;
-  }));
 
   // ── POST /api/v2/admin/backfill-fills?botId=N ─────────────────────
   // One-shot backfill for a specific bot. Pages getFillHistory backwards
@@ -2973,23 +2903,20 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
       // Persist per-bot risk acceptance if the dashboard sent the
       // exact text + version it showed. The text is hashed and the
       // request IP/UA are stored as audit trail.
-      const acceptedText = String(body.acceptedTermsText ?? '').trim();
-      const termsVersion = String(body.termsVersion ?? '').trim();
-      if (acceptedText && termsVersion) {
-        const ipAddress =
-          (req.headers['x-forwarded-for'] as string | undefined)?.split(',')[0]?.trim() ||
-          req.ip ||
-          null;
+      const acceptedTerms = (req.body as { accepted_terms?: unknown })?.accepted_terms === true;
+      if (acceptedTerms) {
+        const tosLang = pickTosLang((req.body as { terms_lang?: unknown })?.terms_lang);
+        const termsText = SIGNUP_TOS_TEXTS[tosLang];
         const userAgent = req.header('user-agent') || null;
         await gridBotDb.insertTermsAcceptance({
           user_id: userId,
           context: 'create_bot',
           context_ref: botId,
-          ip_address: ipAddress,
+          ip_address: clientIp(req),
           user_agent: userAgent,
-          terms_version: termsVersion,
-          terms_text: acceptedText,
-          terms_text_hash: createHash('sha256').update(acceptedText).digest('hex'),
+          terms_version: `${SIGNUP_TOS_VERSION}-${tosLang}`,
+          terms_text: termsText,
+          terms_text_hash: createHash('sha256').update(termsText).digest('hex'),
         });
       }
 
@@ -3064,8 +2991,7 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
       }
       res.status(500).json({
         error: 'create_failed',
-        message,
-        issues: [{ field: 'form', code: 'generic', message }],
+        issues: [{ field: 'form', code: 'generic' }],
       });
     }
     return;
@@ -3503,7 +3429,7 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
 
       res.json({ ...result, equityCurve: thinCurve });
     } catch (err) {
-      res.status(500).json({ error: 'backtest_failed', message: (err as Error).message });
+      res.status(500).json({ error: 'backtest_failed' });
     }
     return;
   }));
@@ -3618,51 +3544,36 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
   // HEALTHCHECK and external monitors can act on the HTTP status code
   // (200 = ok or degraded, 503 = down).
   router.get('/health', asyncHandler(async (_req, res) => {
-    const checks: Record<string, { ok: boolean; ms: number; error?: string }> = {};
+    const checks: Record<string, { ok: boolean; ms: number }> = {};
 
-    // DB: lightweight SELECT
     const dbStart = Date.now();
-    let runningBots = 0;
     try {
-      const row = await dbGet<{ c: number }>(db, `SELECT COUNT(*) as c FROM grid_bots WHERE status = 'running'`);
-      runningBots = row?.c ?? 0;
+      await dbGet<{ c: number }>(db, `SELECT 1 as c`);
       checks.db = { ok: true, ms: Date.now() - dbStart };
-    } catch (err) {
-      checks.db = { ok: false, ms: Date.now() - dbStart, error: (err as Error).message };
+    } catch {
+      checks.db = { ok: false, ms: Date.now() - dbStart };
     }
 
-    // GRVT: public ticker (no auth needed)
     const grvtStart = Date.now();
     try {
       await grvtClient.getTicker('BTC_USDT_Perp');
       checks.grvt = { ok: true, ms: Date.now() - grvtStart };
-    } catch (err) {
-      checks.grvt = { ok: false, ms: Date.now() - grvtStart, error: (err as Error).message };
+    } catch {
+      checks.grvt = { ok: false, ms: Date.now() - grvtStart };
     }
 
     const allOk = Object.values(checks).every(c => c.ok);
     const status = allOk ? 'ok' : checks.db?.ok ? 'degraded' : 'down';
     const httpCode = allOk ? 200 : checks.db?.ok ? 200 : 503;
 
-    res.status(httpCode).json({
-      status,
-      checks,
-      uptime: Math.floor(process.uptime()),
-      runningBots: checks.db?.ok ? runningBots : null,
-      cacheSize: cache.size(),
-      memory: {
-        rss: Math.round(process.memoryUsage().rss / 1024 / 1024),
-        heapUsed: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
-      },
-      ts: Date.now(),
-    });
+    res.status(httpCode).json({ status, checks });
     return;
   }));
 
   // Error handler — turn anything thrown by an asyncHandler into JSON
   router.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
     log.error({ err: err.message, stack: err.stack }, 'v2 endpoint error');
-    res.status(500).json({ error: 'internal_error', message: err.message });
+    res.status(500).json({ error: 'internal_error' });
   });
 
   return router;

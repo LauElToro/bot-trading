@@ -4,7 +4,7 @@
 // Fallback: JWT_SECRET (legacy single-secret installs).
 // Rotating either secret invalidates that token family.
 
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import jwt from 'jsonwebtoken';
 import { isUserId, type UserId } from './user-id.js';
 
@@ -43,6 +43,7 @@ export function refreshTtlSeconds(): number {
 
 export interface JwtPayload {
   userId: UserId;
+  tv: number;
 }
 
 export interface TokenPair {
@@ -51,17 +52,21 @@ export interface TokenPair {
   expiresIn: number;
 }
 
-export function signAccessToken(userId: UserId): string {
-  return jwt.sign({ userId, typ: 'access' }, getAccessSecret(), {
-    algorithm: 'HS256',
-    issuer: ISSUER,
-    expiresIn: accessTtlSeconds(),
-  });
+export function signAccessToken(userId: UserId, tokenVersion = 1): string {
+  return jwt.sign(
+    { userId, typ: 'access', tv: tokenVersion, jti: randomUUID() },
+    getAccessSecret(),
+    {
+      algorithm: 'HS256',
+      issuer: ISSUER,
+      expiresIn: accessTtlSeconds(),
+    },
+  );
 }
 
 /** @deprecated Use signAccessToken. Kept so existing callers/tests keep compiling. */
-export function signToken(userId: UserId): string {
-  return signAccessToken(userId);
+export function signToken(userId: UserId, tokenVersion = 1): string {
+  return signAccessToken(userId, tokenVersion);
 }
 
 export function signRefreshToken(userId: UserId): string {
@@ -72,9 +77,9 @@ export function signRefreshToken(userId: UserId): string {
   });
 }
 
-export function signTokenPair(userId: UserId): TokenPair {
+export function signTokenPair(userId: UserId, tokenVersion = 1): TokenPair {
   return {
-    accessToken: signAccessToken(userId),
+    accessToken: signAccessToken(userId, tokenVersion),
     refreshToken: signRefreshToken(userId),
     expiresIn: accessTtlSeconds(),
   };
@@ -90,7 +95,11 @@ export function verifyToken(token: string): JwtPayload | null {
       const typ = (decoded as { typ?: string }).typ;
       if (typ && typ !== 'access') return null;
       const userId = (decoded as { userId?: unknown }).userId;
-      return isUserId(userId) ? { userId } : null;
+      const tv = (decoded as { tv?: unknown }).tv;
+      if (!isUserId(userId) || typeof tv !== 'number' || !Number.isInteger(tv) || tv < 1) {
+        return null;
+      }
+      return { userId, tv };
     }
     return null;
   } catch {
@@ -98,7 +107,7 @@ export function verifyToken(token: string): JwtPayload | null {
   }
 }
 
-export function verifyRefreshToken(token: string): JwtPayload | null {
+export function verifyRefreshToken(token: string): { userId: UserId } | null {
   try {
     const decoded = jwt.verify(token, getRefreshSecret(), {
       algorithms: ['HS256'],

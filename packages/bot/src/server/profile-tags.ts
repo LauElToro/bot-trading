@@ -1,4 +1,4 @@
-import { randomInt } from 'node:crypto';
+import { createHash, randomInt } from 'node:crypto';
 import type { QueryExecutor } from '../database/postgres.js';
 import type { UserId } from '../auth/user-id.js';
 
@@ -23,12 +23,12 @@ export class TagTakenError extends Error {
   }
 }
 
-/** Visible name: public display name, or the email local-part when it is empty. */
-export function identityName(displayName: string | null | undefined, email?: string | null): string {
+/** Visible name: public display name, or an opaque alias. Never the email. */
+export function identityName(displayName: string | null | undefined, opaqueId?: string | null): string {
   const trimmed = displayName?.trim();
   if (trimmed) return trimmed;
-  const local = (email ?? '').split('@')[0] ?? 'trader';
-  return local.slice(0, 24);
+  const suffix = createHash('sha256').update(opaqueId || 'anon').digest('hex').slice(0, 4);
+  return `Trader ${suffix}`;
 }
 
 /** Case-insensitive key for Nombre#TAG. LauToro#LAS and lautoro#las are the same handle. */
@@ -106,7 +106,7 @@ async function loadIdentity(db: QueryExecutor, userId: UserId): Promise<string> 
     `SELECT display_name, email FROM users WHERE id = ?`,
     [userId],
   );
-  return identityName(row?.display_name, row?.email);
+  return identityName(row?.display_name, userId);
 }
 
 async function handleOwner(db: QueryExecutor, key: string): Promise<string | undefined> {

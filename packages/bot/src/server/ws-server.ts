@@ -183,15 +183,17 @@ export class GrvtWebSocketServer {
               accepted.push(channel);
               continue;
             }
-            if (state.userId !== null && this.authorizeChannel) {
-              const ok = await this.authorizeChannel(state.userId, channel).catch((err) => {
-                log.error({ err, channel, userId: state.userId }, 'authorizeChannel threw');
-                return false;
-              });
-              if (!ok) {
-                rejected.push(channel);
-                continue;
-              }
+            if (state.userId === null || !this.authorizeChannel) {
+              rejected.push(channel);
+              continue;
+            }
+            const ok = await this.authorizeChannel(state.userId, channel).catch((err) => {
+              log.error({ err, channel, userId: state.userId }, 'authorizeChannel threw');
+              return false;
+            });
+            if (!ok) {
+              rejected.push(channel);
+              continue;
             }
             const teardown = wsBus.subscribe(channel, (busMsg) => {
               this.send(state.ws, busMsg);

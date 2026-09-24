@@ -14,6 +14,7 @@
     "test:postgres": "vitest run tests/postgres-integration.test.ts",
     "test:watch": "vitest",
     "migrate:postgres": "tsx tools/migrate-sqlite-to-postgres.ts",
+    "rotate:credentials": "tsx tools/rotate-credential-key.ts",
     "typecheck": "tsc --noEmit",
     "clean": "rm -rf dist tsconfig.tsbuildinfo"
   },

@@ -134,7 +134,7 @@ export async function searchTraders(db: QueryExecutor, raw: string): Promise<Tra
   }
 
   return rows.map((row) => {
-    const name = identityName(row.display_name, row.email);
+    const name = identityName(row.display_name, row.id);
     const tag = row.tag;
     return {
       id: row.id,

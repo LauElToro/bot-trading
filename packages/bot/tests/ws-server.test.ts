@@ -124,7 +124,7 @@ describe('GrvtWebSocketServer (D.9)', () => {
     c.close();
   });
 
-  it('subscribe + publish round-trip: client receives bus events on subscribed channel', async () => {
+  it('api-key clients cannot subscribe to bot channels', async () => {
     const c = new TestClient();
     await c.open();
     await c.next();
@@ -132,13 +132,11 @@ describe('GrvtWebSocketServer (D.9)', () => {
     c.send({ type: 'subscribe', channels: ['bot:42'] });
     const ack = await c.next();
     expect(ack.type).toBe('subscribed');
-    expect((ack.data as { channels: string[] }).channels).toEqual(['bot:42']);
+    expect((ack.data as { channels: string[]; rejected?: string[] }).channels).toEqual([]);
+    expect((ack.data as { rejected?: string[] }).rejected).toEqual(['bot:42']);
 
     wsBus.publish('bot:42', 'fill', { price: 2100, size: 0.05 });
-    const event = await c.next();
-    expect(event.type).toBe('fill');
-    expect(event.channel).toBe('bot:42');
-    expect(event.data).toEqual({ price: 2100, size: 0.05 });
+    await expect(c.next(100)).rejects.toThrow(/timeout/);
     c.close();
   });
 
@@ -154,21 +152,15 @@ describe('GrvtWebSocketServer (D.9)', () => {
     c.close();
   });
 
-  it('unsubscribe stops delivery from that channel', async () => {
+  it('api-key clients cannot subscribe to global channels', async () => {
     const c = new TestClient();
     await c.open();
     await c.next();
-    c.send({ type: 'subscribe', channels: ['prices'] });
-    await c.next();
-
-    wsBus.publish('prices', 'tick', { eth: 2100 });
-    const first = await c.next();
-    expect(first.data).toEqual({ eth: 2100 });
-
-    c.send({ type: 'unsubscribe', channels: ['prices'] });
-    await new Promise((r) => setTimeout(r, 30));
-
-    wsBus.publish('prices', 'tick', { eth: 2200 });
+    c.send({ type: 'subscribe', channels: ['prices', 'fills', 'bots'] });
+    const ack = await c.next();
+    expect((ack.data as { channels: string[] }).channels).toEqual([]);
+    expect((ack.data as { rejected?: string[] }).rejected).toEqual(['prices', 'fills', 'bots']);
+    wsBus.publish('fills', 'fill', { price: 1 });
     await expect(c.next(100)).rejects.toThrow(/timeout/);
     c.close();
   });
@@ -200,7 +192,7 @@ describe('GrvtWebSocketServer (D.9)', () => {
     await c.next();
     c.send({ type: 'subscribe', channels: ['bot:7', 'prices'] });
     await c.next();
-    expect(wsBus.subscriberCount()).toBe(2);
+    expect(wsBus.subscriberCount()).toBe(0);
 
     const closedP = new Promise<void>((resolve) => c.ws.once('close', () => resolve()));
     c.close();
@@ -219,7 +211,7 @@ describe('GrvtWebSocketServer (D.9)', () => {
     await c.next();
     c.send({ type: 'subscribe', channels: ['bot:1'] });
     await c.next();
-    expect(wsBus.subscriberCount()).toBe(1);
+    expect(wsBus.subscriberCount()).toBe(0);
     c.close();
   });
 });
@@ -239,7 +231,7 @@ describe('GrvtWebSocketServer — JWT-mode ownership gating (C-2)', () => {
 
   const authorizeChannel = async (userId: string, channel: string): Promise<boolean> => {
     const m = /^bot:(\d+)$/.exec(channel);
-    if (!m) return true;
+    if (!m) return false;
     const botId = parseInt(m[1]!, 10);
     if (botId === 1) return userId === userA;
     if (botId === 2) return userId === userB;
@@ -341,18 +333,18 @@ describe('GrvtWebSocketServer — JWT-mode ownership gating (C-2)', () => {
     ws.close();
   });
 
-  it('mixed subscribe: owned bot accepted, foreign bot rejected, non-bot channel broadcast', async () => {
+  it('rejects fills, bots and foreign bot channels', async () => {
     const { ws, queue } = await openAuthed(`user:${userA}`);
     await new Promise((r) => setTimeout(r, 30));
-    ws.send(JSON.stringify({ type: 'subscribe', channels: ['bot:1', 'bot:2', 'prices'] }));
+    ws.send(JSON.stringify({ type: 'subscribe', channels: ['bot:1', 'bot:2', 'fills', 'bots'] }));
     await new Promise((r) => setTimeout(r, 50));
 
     const ack = queue.find((m) => m.type === 'subscribed') as
       | (WsMessage & { data: { channels: string[]; rejected?: string[] } })
       | undefined;
     expect(ack).toBeDefined();
-    expect(ack!.data.channels.sort()).toEqual(['bot:1', 'prices']);
-    expect(ack!.data.rejected).toEqual(['bot:2']);
+    expect(ack!.data.channels).toEqual(['bot:1']);
+    expect(ack!.data.rejected?.sort()).toEqual(['bot:2', 'bots', 'fills']);
     ws.close();
   });
 });

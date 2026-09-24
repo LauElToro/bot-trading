@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+  signAccessToken,
   signTokenPair,
   verifyToken,
   verifyRefreshToken,
@@ -19,6 +20,15 @@ describe('JWT access/refresh pair', () => {
     const pair = signTokenPair(uid);
     expect(verifyRefreshToken(pair.refreshToken)?.userId).toBe(uid);
     expect(verifyToken(pair.refreshToken)).toBeNull();
+  });
+
+  it('rejects an access token whose version is missing and exposes tv', () => {
+    const uid = '11111111-1111-4111-8111-111111111111';
+    const current = signAccessToken(uid, 2);
+    expect(verifyToken(current)?.tv).toBe(2);
+    const stale = signAccessToken(uid, 1);
+    expect(verifyToken(stale)?.tv).toBe(1);
+    expect(verifyToken(stale)?.tv).not.toBe(2);
   });
 
   it('hashes refresh tokens stably', () => {

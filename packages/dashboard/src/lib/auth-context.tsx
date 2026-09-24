@@ -1,9 +1,7 @@
 // Auth context — manages JWT access/refresh, user profile, and auth flows.
 //
-// Access token lives in localStorage('grvt-grid-token'); refresh in
-// 'grvt-grid-refresh'. On mount we validate via GET /auth/me. A 401
-// first tries /auth/refresh; if that fails we clear session and go
-// to /login. The api-client retries expired access tokens the same way.
+// Access token lives in memory. Refresh is an httpOnly cookie. On mount we
+// call /auth/refresh, then GET /auth/me. A 401 retries refresh once.
 
 import {
   createContext,
@@ -68,7 +66,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const stored = loadStoredSession();
   const [token, setToken] = useState<string | null>(stored.access);
   const [user, setUser] = useState<AuthUser | null>(null);
-  const [loading, setLoading] = useState(!!stored.access);
+  const [loading, setLoading] = useState(true);
 
   const applyAccessToken = useCallback((t: string) => {
     setAuthToken(t);
@@ -113,12 +111,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [logout]);
 
   useEffect(() => {
-    if (token) {
-      setAuthToken(token);
-      refreshMe().finally(() => setLoading(false));
-    } else {
-      setLoading(false);
-    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const session = await api.refreshSession();
+        if (cancelled) return;
+        applyAccessToken(session.token);
+        await refreshMe();
+      } catch {
+        if (!cancelled) {
+          clearSessionTokens();
+          setToken(null);
+          setUser(null);
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // Boot once. refreshMe is stable enough for the first paint.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

@@ -3,20 +3,26 @@
 // test the surrounding logic: aria-labels, empty states, and that the
 // data shape is accepted without throwing.
 
+import type { ReactElement } from 'react';
 import { describe, it, expect } from 'vitest';
 import { render, screen } from '@testing-library/react';
+import { LangProvider } from '@/i18n/context';
 import { Sparkline } from '@/components/charts/sparkline';
 import { EquityCurve } from '@/components/charts/equity-curve';
 
+function renderCurve(node: ReactElement) {
+  return render(<LangProvider>{node}</LangProvider>);
+}
+
 describe('Sparkline', () => {
-  it('renders a fallback "—" when there are fewer than 2 points', () => {
-    const { container } = render(<Sparkline data={[]} />);
-    expect(container.textContent).toBe('—');
+  it('renders a fallback when there are fewer than 2 points', () => {
+    render(<Sparkline data={[]} />);
+    expect(screen.getByRole('img')).toHaveAttribute('aria-label', 'Equity sparkline unavailable');
   });
 
   it('renders a single-point dataset as the fallback (need >= 2 for a trend)', () => {
-    const { container } = render(<Sparkline data={[{ value: 100 }]} />);
-    expect(container.textContent).toBe('—');
+    render(<Sparkline data={[{ value: 100 }]} />);
+    expect(screen.getByRole('img')).toHaveAttribute('aria-label', 'Equity sparkline unavailable');
   });
 
   it('renders an up trend with aria-label containing "up" and the percent change', () => {
@@ -51,22 +57,22 @@ describe('Sparkline', () => {
 
 describe('EquityCurve', () => {
   it('renders the empty state when no input given', () => {
-    const { container } = render(<EquityCurve />);
+    const { container } = renderCurve(<EquityCurve />);
     expect(container.textContent).toContain('No snapshot history yet');
   });
 
   it('renders the empty state when snapshots is an empty array', () => {
-    const { container } = render(<EquityCurve snapshots={[]} />);
+    const { container } = renderCurve(<EquityCurve snapshots={[]} />);
     expect(container.textContent).toContain('No snapshot history yet');
   });
 
   it('renders the empty state when points is an empty array', () => {
-    const { container } = render(<EquityCurve points={[]} />);
+    const { container } = renderCurve(<EquityCurve points={[]} />);
     expect(container.textContent).toContain('No snapshot history yet');
   });
 
   it('accepts the points input shape and emits an aria-labeled chart', () => {
-    render(
+    renderCurve(
       <EquityCurve
         points={[
           { date: '2026-05-01', equity: 1000 },
@@ -86,7 +92,7 @@ describe('EquityCurve', () => {
   it('accepts the legacy snapshots input and reverses newest-first → chronological', () => {
     // Caller passes newest-first (the /bots/:id/snapshots endpoint default).
     // The component should reverse and compute up/down from chronological order.
-    render(
+    renderCurve(
       <EquityCurve
         snapshots={[
           {
@@ -113,7 +119,7 @@ describe('EquityCurve', () => {
   });
 
   it('honors a custom height prop', () => {
-    const { container } = render(
+    const { container } = renderCurve(
       <EquityCurve points={[{ date: 'a', equity: 1 }, { date: 'b', equity: 2 }]} height={300} />
     );
     const wrapper = container.querySelector('[role="img"]') as HTMLElement;
