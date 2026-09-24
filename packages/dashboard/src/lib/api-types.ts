@@ -519,6 +519,49 @@ export interface TraderProfile {
   following?: FollowingEntry[];
 }
 
+export interface AutoCopierBot {
+  botId: number;
+  pair: string;
+  direction: 'long' | 'short';
+  status: string;
+  investmentUsdt: number;
+  pnlUsdt: number;
+  pnlPct: number;
+  leaderPair: string;
+}
+
+export interface AutoCopier {
+  id: string;
+  name: string;
+  hasAvatar: boolean;
+  avatarUpdatedAt: number | null;
+  copyInvestmentUsdt: number;
+  copies: number;
+  investedUsdt: number;
+  pnlUsdt: number;
+  pnlPct: number;
+  bots: AutoCopierBot[];
+}
+
+export interface AutoCopierPage {
+  page: number;
+  pageSize: number;
+  total: number;
+  summary: {
+    people: number;
+    copies: number;
+    running: number;
+    paused: number;
+    closed: number;
+    investedUsdt: number;
+    pnlUsdt: number;
+    pnlPct: number;
+    realizedUsdt: number;
+    unrealizedUsdt: number;
+  };
+  rows: AutoCopier[];
+}
+
 export interface AccountPerformance {
   connected: boolean;
   live: boolean;

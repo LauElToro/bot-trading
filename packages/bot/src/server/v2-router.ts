@@ -51,6 +51,7 @@ import { loadTraderEquityCurve, loadTraderProfile } from './profile-stats.js';
 import {
   followUser,
   getFollowState,
+  listAutoCopiers,
   listFollowing,
   mirrorLeaderStart,
   notifyFollowers,
@@ -1878,6 +1879,12 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
       });
     }
     res.json(result.state);
+    return;
+  }));
+
+  router.get('/profile/auto-copiers', asyncHandler(async (req, res) => {
+    const page = Number(req.query.page ?? 1);
+    res.json(await listAutoCopiers(db, req.userId!, page));
     return;
   }));
 

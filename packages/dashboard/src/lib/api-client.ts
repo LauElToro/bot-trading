@@ -253,6 +253,9 @@ export const api = {
       body: JSON.stringify(body),
     }),
 
+  getAutoCopiers: (page = 1) =>
+    request<import('./api-types').AutoCopierPage>(`/profile/auto-copiers?page=${page}`),
+
   searchTraders: (query: string) =>
     request<{ traders: import('./api-types').TraderSearchHit[] }>(
       `/community/search?q=${encodeURIComponent(query)}`,

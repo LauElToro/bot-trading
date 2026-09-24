@@ -6,11 +6,10 @@ import { useAuth } from '@/lib/auth-context';
 import { communityAvatarUrl, publicDisplayName } from '@/lib/avatar';
 import { presetFromCopy } from '@/lib/community-preset';
 import { formatPercent, formatPnl, formatUsd } from '@/lib/format';
-import { ApiError, type AccountPerformance, type FollowState, type FollowingEntry, type ProfileCopier, type ProfileOwnBot, type ProfileStrategy, type TraderProfile } from '@/lib/api-types';
+import { ApiError, type AccountPerformance, type FollowState, type FollowingEntry, type ProfileOwnBot, type ProfileStrategy, type TraderProfile } from '@/lib/api-types';
 import { PageHeader } from '@/components/page-header';
 import { UserAvatar } from '@/components/user-avatar';
 import { StatCard } from '@/components/primitives/stat-card';
-import { Delta } from '@/components/primitives/delta';
 import { Button } from '@/components/primitives/button';
 import { Card } from '@/components/primitives/card';
 import { StatusPill } from '@/components/primitives/status-pill';
@@ -80,6 +79,27 @@ function FollowingLine({ entry }: { entry: FollowingEntry }) {
   );
 }
 
+function FollowHelp() {
+  const t = useT();
+  return (
+    <span className="group relative inline-flex">
+      <button
+        type="button"
+        aria-label={t('trader.followHelpLabel')}
+        className="flex size-8 items-center justify-center rounded-full border border-border-subtle text-sm text-text-muted"
+      >
+        ?
+      </button>
+      <span
+        role="tooltip"
+        className="pointer-events-none absolute right-0 top-full z-20 mt-2 hidden w-64 border border-border-subtle bg-bg-base p-3 text-left text-xs leading-5 text-text-secondary shadow-lg group-hover:block group-focus-within:block"
+      >
+        {t('trader.followHelp')}
+      </span>
+    </span>
+  );
+}
+
 export function FollowControls({ userId, follow }: { userId: string; follow: FollowState }) {
   const t = useT();
   const queryClient = useQueryClient();
@@ -101,17 +121,23 @@ export function FollowControls({ userId, follow }: { userId: string; follow: Fol
 
   if (!follow.following) {
     return (
-      <Button disabled={busy} onClick={() => void run(() => api.followTrader(userId))}>
-        {t('trader.follow')}
-      </Button>
+      <div className="flex items-center gap-2">
+        <Button disabled={busy} onClick={() => void run(() => api.followTrader(userId))}>
+          {t('trader.follow')}
+        </Button>
+        <FollowHelp />
+      </div>
     );
   }
 
   return (
-    <div className="flex flex-col items-stretch gap-3 sm:items-end">
-      <Button variant="secondary" disabled={busy} onClick={() => void run(() => api.unfollowTrader(userId))}>
-        {t('trader.unfollow')}
-      </Button>
+    <div className="flex w-full max-w-xs flex-col items-stretch gap-3">
+      <div className="flex items-center justify-end gap-2">
+        <Button variant="secondary" disabled={busy} onClick={() => void run(() => api.unfollowTrader(userId))}>
+          {t('trader.unfollow')}
+        </Button>
+        <FollowHelp />
+      </div>
       <div className="w-full max-w-xs border border-border-subtle bg-bg-elevated p-3 text-left">
         <p className="text-sm font-medium">{t('trader.autoCopy')}</p>
         <p className="mt-1 text-xs leading-5 text-text-muted">{t('trader.autoCopyHint')}</p>
@@ -224,15 +250,9 @@ export function ProfilePage() {
               {t('trader.edit')}
             </Button>
           ) : (
-            <div className="flex flex-col items-stretch gap-3 sm:items-end">
-              <FollowControls
-                userId={routeUserId!}
-                follow={publicQuery.data?.follow ?? { following: false, autoCopy: false, copyInvestmentUsdt: null }}
-              />
-              <Button variant="secondary" onClick={() => navigate('/dashboard/podio')}>
-                {t('trader.backToPodium')}
-              </Button>
-            </div>
+            <Button variant="secondary" onClick={() => navigate('/dashboard/podio')}>
+              {t('trader.backToPodium')}
+            </Button>
           )
         }
       />
@@ -283,6 +303,14 @@ export function ProfilePage() {
               )}
             </dl>
           </div>
+          {!mine && routeUserId && (
+            <div className="shrink-0 sm:pt-1">
+              <FollowControls
+                userId={routeUserId}
+                follow={publicQuery.data?.follow ?? { following: false, autoCopy: false, copyInvestmentUsdt: null }}
+              />
+            </div>
+          )}
         </div>
       </Card>
 
@@ -329,7 +357,7 @@ function ProfileBody({
   onCopy: ((publishedId: number) => void) | null;
 }) {
   const t = useT();
-  const { bots, audience, account } = profile;
+  const { bots, account } = profile;
   const running = profile.ownBots.filter((bot) => bot.status === 'running');
   const paused = profile.ownBots.filter((bot) => bot.status === 'paused');
   const closed = profile.ownBots.filter((bot) => bot.status !== 'running' && bot.status !== 'paused');
@@ -396,42 +424,6 @@ function ProfileBody({
       </section>
 
       <section className="flex flex-col gap-3">
-        <SectionTitle title={t('trader.sectionAudience')} hint={t('trader.audienceBody')} />
-        <div className="grid grid-cols-2 gap-px overflow-hidden bg-border-subtle md:grid-cols-4">
-          <StatCard label={t('trader.uniqueCopiers')} value={String(audience.uniqueCopiers)} />
-          <StatCard label={t('trader.copiesCreated')} value={String(audience.copiesCreated)} />
-          <StatCard label={t('trader.copiesRunning')} value={String(audience.copiesRunning)} />
-          <StatCard label={t('trader.copiesClosed')} value={String(audience.copiesClosed)} />
-          <StatCard label={t('trader.copiesPaused')} value={String(audience.copiesPaused)} />
-          <StatCard
-            label={t('trader.copierPnl')}
-            value={formatPnl(audience.pnlUsdt)}
-            delta={<Delta value={audience.pnlPct} format={formatPercent} />}
-          />
-          <StatCard label={t('trader.copierInvested')} value={formatUsd(audience.investedUsdt)} />
-          <StatCard label={t('trader.copyInterests')} value={String(audience.copyInterests)} />
-        </div>
-        <p className="text-xs text-text-muted">
-          {t('trader.interestPeople', { count: audience.uniqueInterestPeople })}
-          {' · '}
-          {t('trader.copierSplit', {
-            realized: formatPnl(audience.realizedUsdt),
-            unrealized: formatPnl(audience.unrealizedUsdt),
-          })}
-        </p>
-        {profile.copiers.some((copier) => copier.status === 'running') && (
-          <div className="flex flex-col border border-border-subtle bg-bg-elevated">
-            {profile.copiers.filter((copier) => copier.status === 'running').map((copier, index) => (
-              <CopierRow key={`${copier.id}-${copier.botId ?? index}`} copier={copier} />
-            ))}
-          </div>
-        )}
-        {audience.copiesCreated === 0 && profile.copiers.length === 0 && (
-          <p className="text-sm text-text-muted">{t('trader.noCopies')}</p>
-        )}
-      </section>
-
-      <section className="flex flex-col gap-3">
         <SectionTitle title={t('trader.sectionStrategies')} />
         {profile.strategies.length === 0 ? (
           <Card>
@@ -485,46 +477,6 @@ function SectionTitle({ title, hint }: { title: string; hint?: string }) {
       <h2 className="text-lg font-semibold tracking-tight">{title}</h2>
       {hint && <p className="mt-1 max-w-3xl text-sm leading-6 text-text-muted">{hint}</p>}
     </div>
-  );
-}
-
-function CopierRow({ copier }: { copier: ProfileCopier }) {
-  const t = useT();
-  const pnl = copier.pnlUsdt;
-  return (
-    <Link
-      to={`/dashboard/perfil/${copier.id}`}
-      className="flex items-center justify-between gap-3 border-b border-border-subtle px-4 py-3 last:border-0 hover:bg-bg-muted/40"
-    >
-      <span className="flex min-w-0 items-center gap-3">
-        <UserAvatar
-          name={copier.name}
-          email=""
-          src={communityAvatarUrl(copier.id, copier.hasAvatar)}
-          size="sm"
-        />
-        <span className="min-w-0">
-          <ProfileTags name={copier.name} tags={copier.tags} className="text-sm font-medium" tagClassName="text-[11px]" />
-          <span className="mt-1 block font-mono text-[10px] text-text-muted">
-            {copier.pair ?? t('trader.copierTapOnly')}
-            {copier.investmentUsdt != null ? ` · ${formatUsd(copier.investmentUsdt)}` : ''}
-          </span>
-        </span>
-      </span>
-      <span className="flex shrink-0 flex-col items-end gap-1">
-        {copier.status ? <StatusPill status={copier.status} /> : (
-          <span className="font-mono text-[10px] uppercase tracking-wider text-text-muted">
-            {t('trader.copierTapOnly')}
-          </span>
-        )}
-        {pnl != null && (
-          <span className={cn('font-mono text-sm', pnlClass(pnl))}>
-            {formatPnl(pnl)}
-            {copier.pnlPct != null && <span className="ml-2">{formatPercent(copier.pnlPct)}</span>}
-          </span>
-        )}
-      </span>
-    </Link>
   );
 }
 

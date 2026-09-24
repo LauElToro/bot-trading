@@ -13,6 +13,7 @@ import { BotsListPage } from './pages/bots-list';
 import { SettingsPage } from './pages/settings';
 import { PodiumPage } from './pages/podium';
 import { ProfilePage } from './pages/profile';
+import { AutoCopiersPage } from './pages/auto-copiers';
 import { GuidePage } from './pages/guide';
 import { LoginPage } from './pages/login';
 import { SignupPage } from './pages/signup';
@@ -189,6 +190,14 @@ export default function App() {
                 element={
                   <ErrorBoundary>
                     <PodiumPage />
+                  </ErrorBoundary>
+                }
+              />
+              <Route
+                path="copias"
+                element={
+                  <ErrorBoundary>
+                    <AutoCopiersPage />
                   </ErrorBoundary>
                 }
               />

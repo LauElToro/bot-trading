@@ -37,6 +37,7 @@ describe('FollowControls', () => {
 
   it('follows a trader from the public profile', async () => {
     renderControls(false);
+    expect(screen.getByRole('tooltip')).toHaveTextContent('avisa por mail');
     await userEvent.click(screen.getByRole('button', { name: 'Seguir' }));
     expect(api.followTrader).toHaveBeenCalledWith('trader-1');
   });
